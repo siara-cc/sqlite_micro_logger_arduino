@@ -3,49 +3,104 @@
 #include <stdlib.h>
 #include <string.h>
 
-void writeTwoBytes(byte *ptr, uint16_t bytes) {
-  ptr[0] = bytes >> 8;
-  ptr[1] = bytes & 0xFF;
+void write_uint8(byte *ptr, uint8_t input) {
+  ptr[0] = input;
 }
 
-void writeFourBytes(byte *ptr, uint32_t bytes) {
-  ptr[0] = bytes >> 24;
-  ptr[1] = (bytes >> 16) & 0xFF;
-  ptr[2] = (bytes >> 8) & 0xFF;
-  ptr[3] = bytes & 0xFF;
+void write_uint16(byte *ptr, uint16_t input) {
+  ptr[0] = input >> 8;
+  ptr[1] = input & 0xFF;
 }
 
-void writeVInt1Byte(byte *ptr, byte val) {
-  *ptr = val;
+void write_uint32(byte *ptr, uint32_t input) {
+  ptr[0] = input >> 24;
+  ptr[1] = (input >> 16) & 0xFF;
+  ptr[2] = (input >> 8) & 0xFF;
+  ptr[3] = input & 0xFF;
 }
 
-void writeVInt2Bytes(byte *ptr, uint16_t val) {
-  *buf = 0x80 + (val >> 7);
-  ptr[1] = val & 0x3F;
+int write_vint16(byte *ptr, uint16_t vint) {
+  int len = get_sizeof_vint16(vint);
+  for (int i = len - 1; i > 0; i--)
+    *ptr++ = 0x80 + ((vint >> (7 * i)) & 0xFF);
+  *ptr = vint & 0xFF;
+  return len;
 }
 
-void writeVInt3Bytes(byte *ptr, uint32_t val) {
-  *buf = 0x80 + (val >> 14);
-  ptr[1] = 0x80 + ((val >> 7) & 0x3F);
-  ptr[2] = val & 0x3F;
+int write_vint32(byte *ptr, uint32_t vint) {
+  int len = get_sizeof_vint32(vint);
+  for (int i = len - 1; i > 0; i--)
+    *ptr++ = 0x80 + ((vint >> (7 * i)) & 0xFF);
+  *ptr = vint & 0xFF;
+  return len;
 }
 
-void writeVInt4Bytes(byte *ptr, uint32_t val) {
-  *ptr = 0x80 + (val >> 21);
-  ptr[1] = 0x80 + ((val >> 14) & 0x3F);
-  ptr[2] = 0x80 + ((val >> 7) & 0x3F);
-  ptr[3] = val & 0x3F;
+byte get_sizeof_vint16(uint16_t vint) {
+  return vint > 16383 ? 3 : (vint > 127 ? 2 : 1);
 }
 
-uint16_t readHdrVInt(byte *ptr, int *vlen) {
+byte get_sizeof_vint32(uint32_t vint) {
+  return vint > 268435455 ? 5 : (vint > 2097151 ? 4 
+           : (vint > 16383 ? 3 : (vint > 127 ? 2 : 1)));
+}
+
+uint16_t read_uint16(byte *ptr) {
+  return (*ptr << 8) + ptr[1];
+}
+
+uint32_t read_uint32(byte *ptr) {
+  return (*ptr << 24) + (ptr[1] << 16)
+            + (ptr[2] << 8) + ptr[3];
+}
+
+uint16_t read_vint16(byte *ptr, char *vlen) {
   uint16_t ret = 0;
   *vlen = 2;
   do {
     ret << 7;
     ret += *ptr & 0x3F;
-  } while ((*vlen)--);
+  } while ((*ptr & 0x80) == 0 && (*vlen)--);
   *vlen = 2 - *vlen;
   return ret;
+}
+
+uint32_t read_vint32(byte *ptr, char *vlen) {
+  uint32_t ret = 0;
+  *vlen = 4;
+  do {
+    ret << 7;
+    ret += *ptr & 0x3F;
+  } while ((*ptr & 0x80) == 0 && (*vlen)--);
+  *vlen = 4 - *vlen;
+  return ret;
+}
+
+uint16_t get_pagesize(byte page_size_exp) {
+  uint16_t page_size = 1;
+  if (page_size_exp < 16)
+    page_size <<= (page_size_exp - 1);
+  return page_size;
+}
+
+int get_datatype(byte *ptr, int col_idx) {
+}
+
+const char col_lengths[] = {0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0};
+char get_datalen(uint16_t col_type) {
+  if (col_type < 12)
+    return col_lengths[col_type];
+  if (col_type % 2)
+    return (col_type - 13)/2;
+  return (col_type - 12)/2; 
+}
+
+uint16_t acquire_last_pos(struct ulog_sqlite_context *ctx, byte *ptr) {
+  uint16_t last_pos = read_uint16(ptr + 5);
+  if (last_pos == 0) {
+    ulog_sqlite_new_row(ctx);
+    last_pos = read_uint16(ptr + 5);
+  }
+  return last_pos;
 }
 
 char default_table_name[] = "t1";
@@ -55,44 +110,39 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   // 100 byte header - refer https://www.sqlite.org/fileformat.html
   byte *buf = (byte *) ctx->buf;
   memcpy(buf, "SQLite format 3\0", 16);
-  writeTwoBytes(buf + 16, page_size);
+  write_uint16(buf + 16, page_size);
   buf[18] = 1;
   buf[19] = 1;
   buf[20] = 4; // Provision for checksum
   buf[21] = 64;
   buf[22] = 32;
   buf[23] = 32;
-  //writeFourBytes(buf + 24, 0);
-  //writeFourBytes(buf + 28, 0);
-  //writeFourBytes(buf + 32, 0);
-  //writeFourBytes(buf + 36, 0);
-  //writeFourBytes(buf + 40, 0);
+  //write_uint32(buf + 24, 0);
+  //write_uint32(buf + 28, 0);
+  //write_uint32(buf + 32, 0);
+  //write_uint32(buf + 36, 0);
+  //write_uint32(buf + 40, 0);
   memset(buf + 24, '\0', 20); // Set to zero, above 5
-  writeFourBytes(buf + 44, 4);
-  //writeTwoBytes(buf + 48, 0);
-  //writeTwoBytes(buf + 52, 0);
+  write_uint32(buf + 44, 4);
+  //write_uint16(buf + 48, 0);
+  //write_uint16(buf + 52, 0);
   memset(buf + 48, '\0', 8); // Set to zero, above 2
-  writeFourBytes(buf + 56, 1);
-  //writeTwoBytes(buf + 60, 0);
-  //writeTwoBytes(buf + 64, 0);
-  //writeTwoBytes(buf + 68, 0);
+  write_uint32(buf + 56, 1);
+  //write_uint16(buf + 60, 0);
+  //write_uint16(buf + 64, 0);
+  //write_uint16(buf + 68, 0);
   memset(buf + 60, '\0', 32); // Set to zero above 3 + 20 bytes reserved space
-  writeFourBytes(buf + 92, 7);
-  writeFourBytes(buf + 96, 3028000);
+  write_uint32(buf + 92, 7);
+  write_uint32(buf + 96, 3028000);
   memset(buf + 100, '\0', page_size - 100); // Set remaing page to zero
 
   // master table b-tree
-  buf[100] = 13; // Leaf table b-tree page
-  writeTwoBytes(buf + 101, 0); // No freeblocks
-  writeTwoBytes(buf + 103, 1); // Only one record
-  writeOneByte(buf + 107, 0); // Fragmented free bytes
+  init_btree_page(buf + 100);
 
   // write table script record
   int orig_col_count = ctx->col_count;
   ctx->col_count = 5;
-  ctx->cur_rec_count = 0;
-  ctx->cur_rec_pos = 0;
-  writeEmptyRow(ctx);
+  ulog_sqlite_new_row(ctx);
   ulog_sqlite_set_val(ctx, 0, ULS_TYPE_TEXT, "table", 5);
   if (table_name == NULL)
     table_name = default_table_name;
@@ -122,32 +172,42 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
       *script_pos++ = (i == orig_col_count ? ')' : ',');
     }
   }
+  (ctx->seek_fn)(0);
+  (ctx->write_fn)(ctx->buf, page_size);
   ctx->col_count = orig_col_count;
+  ctx->cur_page = 1;
+  ctx->cur_rowid = 1;
   // write location of last leaf as 0
 
 }
 
-int create_page1(struct ulog_sqlite_context *ctx, char *table_name, char *table_script) {
+int create_page1(struct ulog_sqlite_context *ctx, 
+      char *table_name, char *table_script) {
 
   if (ctx->page_size_exp < 9 || ctx->page_size_exp > 16)
     return ULS_RES_INV_PAGE_SZ;
 
   byte *buf = (byte *) ctx->buf;
-  uint16_t page_size = 1;
-  if (ctx->page_size_exp < 16)
-    page_size <<= (ctx->page_size_exp - 1);
-  writeTwoBytes(buf + 16, page_size);
+  uint16_t page_size = get_pagesize(ctx->page_size_exp);
+  write_uint16(buf + 16, page_size);
   form_page1(ctx, page_size, table_name, table_script);
 
-  ctx->is_row_created = 0;
-  ctx->cur_rec_count = 0;
-  ctx->cur_rec_pos = 0;
   ctx->cur_rowid = 1;
 
 }
 
-int ulog_sqlite_init_with_script(struct ulog_sqlite_context *ctx, char *table_name,
-      char *table_script) {
+void init_btree_page(byte *ptr) {
+
+  ptr[0] = 13; // Leaf table b-tree page
+  write_uint16(ptr + 1, 0); // No freeblocks
+  write_uint16(ptr + 3, 0); // No records yet
+  write_uint16(ptr + 5, 0); // No records yet
+  write_uint8(ptr + 7, 0); // Fragmented free bytes
+
+}
+
+int ulog_sqlite_init_with_script(struct ulog_sqlite_context *ctx, 
+      char *table_name, char *table_script) {
 
   int res = create_page1(ctx, table_name, table_script);
   if (!res)
@@ -156,25 +216,70 @@ int ulog_sqlite_init_with_script(struct ulog_sqlite_context *ctx, char *table_na
 }
 
 int ulog_sqlite_init(struct ulog_sqlite_context *ctx) {
-  return ulog_sqlite_init_with_script(ctx, 0);
+  return ulog_sqlite_init_with_script(ctx, 0, 0);
 }
 
 int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
 
-  // vRecLen + vRowID + vHdrLen(6) + FieldLens + Data
-  // write empty record into buf from cur pos
+  byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 100 : 0);
+  int rec_count = read_uint16(ptr + 3) + 1;
+  uint16_t page_size = get_pagesize(ctx->page_size_exp);
+  uint16_t new_rec_len = ctx->col_count + get_sizeof_vint32(ctx->cur_rowid);
+  new_rec_len += get_sizeof_vint16(new_rec_len);
+  uint16_t last_pos = read_uint16(ptr + 5);
+  if (last_pos == 0)
+    last_pos = ctx->buf + page_size - 4 - new_rec_len;
+  else {
+    last_pos -= new_rec_len;
+    if (last_pos < (ptr - ctx->buf) + 8 + rec_count * 2)) {
+      (ctx->seek_fn)(ctx->cur_page * page_size);
+      (ctx->write_fn)(ctx->buf, page_size);
+      init_btree_page(ctx->buf);
+      last_pos = ctx->buf + page_size - 4 - new_rec_len;
+      rec_count = 1;
+    }
+  }
 
-  ctx->is_row_created = 1;
+  memset(ctx->buf + last_pos, '\0', new_rec_len);
+  int vint_len = write_vint16(ctx->buf + last_pos, new_rec_len);
+  vint_len = write_vint32(ctx->buf + last_pos + vint_len, ctx->cur_rowid++);
+  write_uint16(ptr + 3, rec_count);
+  write_uint16(ptr + 5, last_pos);
+  write_uint16(ptr + 8 - 2 + (rec_count * 2), last_pos);
+
   return 0;
 }
 
-int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx, int col_idx,
-                          int type, void *val, int len) {
+byte *locate_column(byte *rec_ptr, byte **pdata_ptr, 
+             uint16_t *prec_len, uint16_t *phdr_len) {
+  char vint_len;
+  byte *col_ptr = rec_ptr;
+  *prec_len = read_vint16(col_ptr, &vint_len);
+  col_ptr += vint_len;
+  read_vint32(col_ptr, &vint_len);
+  col_ptr += vint_len;
+  *phdr_len = read_vint16(col_ptr, &vint_len);
+  *pdata_ptr = col_ptr + hdr_len;
+  col_ptr += vint_len;
+  for (int i = 0; i < col_idx; i++) {
+    uint16_t col_type = read_vint16(col_ptr, &vint_len);
+    col_ptr += vint_len;
+    (*pdata_ptr) += get_datalen(col_type);
+  }
+  return col_ptr;
+}
 
-  if (!ctx->is_row_created)
-    ulog_sqlite_new_row(ctx);
+int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
+              int col_idx, int type, void *val, int len) {
 
-  // identify datatype
+  byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 100 : 0);
+  uint16_t page_size = get_pagesize(ctx->page_size_exp);
+  uint16_t last_pos = acquire_last_pos(ctx, ptr);
+  byte *data_ptr;
+  uint16_t rec_len;
+  uint16_t hdr_len;
+  byte *col_ptr = locate_column(ctx->buf + last_pos, &data_ptr, &rec_len, &hdr_len);
+
   // Calculate new len
   // If overflow, write and move row to new page
   // set col_len
@@ -190,7 +295,7 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
   // update last page into first page
   // write parent nodes recursively
   // update root page and db size into first page
-  //writeFourBytes(buf + 28, 0); // DB Size
+  //write_uint32(buf + 28, 0); // DB Size
   return 0;
 }
 
