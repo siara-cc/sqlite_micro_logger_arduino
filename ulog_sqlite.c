@@ -82,16 +82,17 @@ uint16_t get_pagesize(byte page_size_exp) {
   return page_size;
 }
 
-int get_datatype(byte *ptr, int col_idx) {
+const char col_data_lens[] = {0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0};
+uint16_t get_data_len(uint32_t col_type_or_len) {
+  if (col_type_or_len < 12)
+    return col_data_lens[col_type_or_len];
+  if (col_type_or_len % 2)
+    return (col_type_or_len - 13)/2;
+  return (col_type_or_len - 12)/2; 
 }
 
-const char col_lengths[] = {0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0};
-char get_datalen(uint16_t col_type) {
-  if (col_type < 12)
-    return col_lengths[col_type];
-  if (col_type % 2)
-    return (col_type - 13)/2;
-  return (col_type - 12)/2; 
+char get_hdr_len(uint32_t col_type_or_len) {
+  return col_type_or_len < 12 ? 1 : get_sizeof_vint32(col_type_or_len);
 }
 
 uint16_t acquire_last_pos(struct ulog_sqlite_context *ctx, byte *ptr) {
@@ -101,6 +102,49 @@ uint16_t acquire_last_pos(struct ulog_sqlite_context *ctx, byte *ptr) {
     last_pos = read_uint16(ptr + 5);
   }
   return last_pos;
+}
+
+byte *locate_column(byte *rec_ptr, int col_idx, byte **pdata_ptr, 
+             uint16_t *prec_len, uint16_t *phdr_len) {
+  char vint_len;
+  byte *col_ptr = rec_ptr;
+  *prec_len = read_vint16(col_ptr, &vint_len);
+  col_ptr += vint_len;
+  read_vint32(col_ptr, &vint_len);
+  col_ptr += vint_len;
+  *phdr_len = read_vint16(col_ptr, &vint_len);
+  *pdata_ptr = col_ptr + *phdr_len;
+  col_ptr += vint_len;
+  for (int i = 0; i < col_idx; i++) {
+    uint32_t col_type_or_len = read_vint32(col_ptr, &vint_len);
+    col_ptr += vint_len;
+    (*pdata_ptr) += get_data_len(col_type_or_len);
+  }
+  return col_ptr;
+}
+
+uint32_t derive_col_type_or_len(int type, void *val, int len) {
+  uint32_t col_type_or_len = 0;
+  if (val != NULL) {
+    switch (type) {
+      case ULS_TYPE_INT:
+        if (len == 1) {
+          int8_t *typed_val = (int8_t *) val;
+          col_type_or_len = (*typed_val == 0 ? 8 : (*typed_val == 1 ? 9 : 0));
+        } else
+          col_type_or_len = (len == 2 ? 2 : (len == 4 ? 4 : 6));
+        break;
+      case ULS_TYPE_REAL:
+        col_type_or_len = 7;
+        break;
+      case ULS_TYPE_BLOB:
+        col_type_or_len = len * 2 + 12;
+        break;
+      case ULS_TYPE_TEXT:
+        col_type_or_len = len * 2 + 13;
+    }
+  }
+  return col_type_or_len;    
 }
 
 char default_table_name[] = "t1";
@@ -231,7 +275,7 @@ int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
     last_pos = ctx->buf + page_size - 4 - new_rec_len;
   else {
     last_pos -= new_rec_len;
-    if (last_pos < (ptr - ctx->buf) + 8 + rec_count * 2)) {
+    if (last_pos < (ptr - ctx->buf) + 8 + rec_count * 2) {
       (ctx->seek_fn)(ctx->cur_page * page_size);
       (ctx->write_fn)(ctx->buf, page_size);
       init_btree_page(ctx->buf);
@@ -250,38 +294,40 @@ int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
   return 0;
 }
 
-byte *locate_column(byte *rec_ptr, byte **pdata_ptr, 
-             uint16_t *prec_len, uint16_t *phdr_len) {
-  char vint_len;
-  byte *col_ptr = rec_ptr;
-  *prec_len = read_vint16(col_ptr, &vint_len);
-  col_ptr += vint_len;
-  read_vint32(col_ptr, &vint_len);
-  col_ptr += vint_len;
-  *phdr_len = read_vint16(col_ptr, &vint_len);
-  *pdata_ptr = col_ptr + hdr_len;
-  col_ptr += vint_len;
-  for (int i = 0; i < col_idx; i++) {
-    uint16_t col_type = read_vint16(col_ptr, &vint_len);
-    col_ptr += vint_len;
-    (*pdata_ptr) += get_datalen(col_type);
-  }
-  return col_ptr;
-}
-
 int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
               int col_idx, int type, void *val, int len) {
 
   byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 100 : 0);
+  int rec_count = read_uint16(ptr + 3);
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
   uint16_t last_pos = acquire_last_pos(ctx, ptr);
   byte *data_ptr;
   uint16_t rec_len;
   uint16_t hdr_len;
-  byte *col_ptr = locate_column(ctx->buf + last_pos, &data_ptr, &rec_len, &hdr_len);
-
-  // Calculate new len
-  // If overflow, write and move row to new page
+  byte *col_ptr = locate_column(ctx->buf + last_pos, col_idx, 
+                        &data_ptr, &rec_len, &hdr_len);
+  char vint_len;
+  uint32_t old_type_or_len = read_vint32(col_ptr, &vint_len);
+  char old_hdr_len = get_hdr_len(old_type_or_len);
+  uint16_t old_data_len = get_data_len(old_type_or_len);
+  uint32_t new_type_or_len = derive_col_type_or_len(type, val, len);
+  char new_hdr_len = get_hdr_len(new_type_or_len);
+  uint16_t new_data_len = get_data_len(new_type_or_len);
+  last_pos += old_hdr_len;
+  last_pos += old_data_len;
+  last_pos -= new_hdr_len;
+  last_pos -= new_data_len;
+  if (last_pos < (ptr - ctx->buf) + 8 + rec_count * 2) {
+    (ctx->seek_fn)(ctx->cur_page * page_size);
+    (ctx->write_fn)(ctx->buf, page_size);
+    init_btree_page(ctx->buf);
+    rec_len -= old_hdr_len;
+    rec_len -= old_data_len;
+    rec_len += new_hdr_len;
+    rec_len += new_data_len;
+    last_pos = ctx->buf + page_size - 4 - rec_len;
+    rec_count = 1;
+  }
   // set col_len
   // set col_val
   // update 
