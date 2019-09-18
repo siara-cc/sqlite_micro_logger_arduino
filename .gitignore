@@ -1,0 +1,7 @@
+.vscode
+.DS_Store
+*.db
+src/*.db
+src/.DS_Store
+src/ulog_sqlite
+src/ulog_sqlite.dSYM
