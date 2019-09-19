@@ -150,9 +150,19 @@ uint32_t derive_col_type_or_len(int type, void *val, int len) {
   return col_type_or_len;    
 }
 
-void init_btree_page(byte *ptr) {
+void init_btree_page13(byte *ptr) {
 
   ptr[0] = 13; // Leaf table b-tree page
+  write_uint16(ptr + 1, 0); // No freeblocks
+  write_uint16(ptr + 3, 0); // No records yet
+  write_uint16(ptr + 5, 0); // No records yet
+  write_uint8(ptr + 7, 0); // Fragmented free bytes
+
+}
+
+void init_btree_page5(byte *ptr) {
+
+  ptr[0] = 5; // Interior table b-tree page
   write_uint16(ptr + 1, 0); // No freeblocks
   write_uint16(ptr + 3, 0); // No records yet
   write_uint16(ptr + 5, 0); // No records yet
@@ -178,8 +188,8 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
 
   // 100 byte header - refer https://www.sqlite.org/fileformat.html
   byte *buf = (byte *) ctx->buf;
-  //memcpy(buf, "uLogger SQLite3\0", 16);
-  memcpy(buf, "SQLite format 3\0", 16);
+  memcpy(buf, "uLogSQLite xxxx\0", 16);
+  //memcpy(buf, "SQLite format 3\0", 16);
   write_uint16(buf + 16, page_size);
   buf[18] = 1;
   buf[19] = 1;
@@ -208,7 +218,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   memset(buf + 100, '\0', page_size - 100); // Set remaing page to zero
 
   // master table b-tree
-  init_btree_page(buf + 100);
+  init_btree_page13(buf + 100);
 
   // write table script record
   int orig_col_count = ctx->col_count;
@@ -250,7 +260,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   ctx->col_count = orig_col_count;
   ctx->cur_page = 1;
   ctx->cur_rowid = 0;
-  init_btree_page(ctx->buf);
+  init_btree_page13(ctx->buf);
   ulog_sqlite_new_row(ctx);
 
 }
@@ -297,7 +307,7 @@ int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
       (ctx->seek_fn)(ctx->cur_page * page_size);
       (ctx->write_fn)(ctx->buf, page_size);
       ctx->cur_page++;
-      init_btree_page(ctx->buf);
+      init_btree_page13(ctx->buf);
       last_pos = page_size - ctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
       rec_count = 1;
     }
@@ -337,7 +347,7 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
     (ctx->seek_fn)(ctx->cur_page * page_size);
     (ctx->write_fn)(ctx->buf, page_size);
     ctx->cur_page++;
-    init_btree_page(ctx->buf);
+    init_btree_page13(ctx->buf);
     memmove(ctx->buf + page_size - ctx->page_resv_bytes - rec_len,
             ctx->buf + last_pos, rec_len);
     hdr_ptr -= last_pos;
@@ -427,9 +437,9 @@ int ulog_sqlite_flush(struct ulog_sqlite_context *ctx) {
   return ret;
 }
 
-// root_page = 2 and prefix = "uLogger SQLite3" -> logging data
-// root_page = x and prefix = "uLogger SQLite3" -> finalizing, x is last data page
-// root_page = x and prefix = "SQLite format 3" -> finalize complete
+// page_count = 2 and prefix = "uLogSQLite xxxx" -> logging data
+// page_count = x and prefix = "uLogSQLite xxxx" -> finalizing, x is last data page
+// page_count = x and prefix = "SQLite format 3" -> finalize complete
 int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
 
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
@@ -445,19 +455,35 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
     return ULS_RES_OK;
 
   if (to_write_page1) {
-    write_uint32(ctx->buf + 28, ctx->cur_page);
+    write_uint32(ctx->buf + 28, ctx->cur_page + 1);
     (ctx->seek_fn)(0);
     (ctx->write_fn)(ctx->buf, page_size);
   }
 
-  // if root page already in Page1
-  //   Nothing to do
-  // else
-  //   update last page into first page
-  // write parent nodes recursively
+  // if (ctx->cur_page == 1) {
+    //write SQLite format 3
+    // return
+  //}
+
+  init_btree_page5(another_buf);
+  for (uint32_t leaf = 1; leaf < ctx->cur_page; leaf++) {
+    (ctx->seek_fn)(leaf * page_size);
+    (ctx->read_fn)(ctx->buf, page_size);
+    // if full or last_leaf, write last rowid to right most pointer (keep space for rowid)
+    // else write last rowid to another_page
+    // write another_page, init and continue
+  }
+  // write last another_page if not written
+
+  //while (multiple internal another_page) {
+  // for (i = 0; i < last_page; i++) {
+  //   write right-most pointer's rowid to another page
+  // }
+  //}
+  //write SQLite format 3
   // update root page and db size into first page
-  //write_uint32(buf + 28, 0); // DB Size
-  return 0;
+
+  return ULS_RES_OK;
 }
 
 int ulog_sqlite_check(struct ulog_sqlite_context *ctx) {
