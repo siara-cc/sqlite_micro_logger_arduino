@@ -192,6 +192,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   //write_uint32(buf + 36, 0);
   //write_uint32(buf + 40, 0);
   memset(buf + 24, '\0', 20); // Set to zero, above 5
+  write_uint32(buf + 28, 2); // TODO: Update during finalize
   write_uint32(buf + 44, 4);
   //write_uint16(buf + 48, 0);
   //write_uint16(buf + 52, 0);
@@ -201,8 +202,8 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   //write_uint16(buf + 64, 0);
   //write_uint16(buf + 68, 0);
   memset(buf + 60, '\0', 32); // Set to zero above 3 + 20 bytes reserved space
-  write_uint32(buf + 92, 7);
-  write_uint32(buf + 96, 3028000);
+  write_uint32(buf + 92, 105);
+  write_uint32(buf + 96, 3016000);
   memset(buf + 100, '\0', page_size - 100); // Set remaing page to zero
 
   // master table b-tree
@@ -220,6 +221,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   ulog_sqlite_set_val(ctx, 2, ULS_TYPE_TEXT, table_name, strlen(table_name));
   int32_t root_page = 2;
   ulog_sqlite_set_val(ctx, 3, ULS_TYPE_INT, &root_page, 4);
+  // TODO: check whether will fit
   if (table_script)
     ulog_sqlite_set_val(ctx, 4, ULS_TYPE_TEXT, table_script, strlen(table_script));
   else {
@@ -258,8 +260,8 @@ int create_page1(struct ulog_sqlite_context *ctx,
   byte *buf = (byte *) ctx->buf;
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
   write_uint16(buf + 16, page_size);
-  form_page1(ctx, page_size, table_name, table_script);
   ctx->cur_rowid = 0;
+  form_page1(ctx, page_size, table_name, table_script);
   return ULS_RES_OK;
 }
 
@@ -278,25 +280,26 @@ int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
   byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 0 : 100);
   int rec_count = read_uint16(ptr + 3) + 1;
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
-  uint16_t new_rec_len = ctx->col_count + get_sizeof_vint32(ctx->cur_rowid);
+  uint16_t len_of_rec_len_rowid = 3 + get_sizeof_vint32(ctx->cur_rowid);
+  uint16_t new_rec_len = ctx->col_count;
   new_rec_len += 2; // 3 for record len and 2 for header len
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0)
-    last_pos = page_size - ctx->page_resv_bytes - new_rec_len - 3;
+    last_pos = page_size - ctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
   else {
     last_pos -= new_rec_len;
-    last_pos -= 3;
+    last_pos -= len_of_rec_len_rowid;
     if (last_pos < (ptr - ctx->buf) + 8 + rec_count * 2) {
       (ctx->seek_fn)(ctx->cur_page * page_size);
       (ctx->write_fn)(ctx->buf, page_size);
       ctx->cur_page++;
       init_btree_page(ctx->buf);
-      last_pos = page_size - ctx->page_resv_bytes - new_rec_len - 3;
+      last_pos = page_size - ctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
       rec_count = 1;
     }
   }
 
-  memset(ctx->buf + last_pos, '\0', new_rec_len + 3);
+  memset(ctx->buf + last_pos, '\0', new_rec_len + len_of_rec_len_rowid);
   write_rec_len_rowid_hdr_len(ctx->buf + last_pos, new_rec_len, 
                               ctx->cur_rowid, ctx->col_count + 2);
   write_uint16(ptr + 3, rec_count);
@@ -461,6 +464,7 @@ int main() {
   ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_TEXT, "I", 1);
   ulog_sqlite_set_val(&ctx, 1, ULS_TYPE_TEXT, "am", 2);
   ulog_sqlite_set_val(&ctx, 2, ULS_TYPE_TEXT, "fine", 4);
+  //ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, "Suillus bovinus, the Jersey cow mushroom, is a pored mushroom in the family Suillaceae. A common fungus native to Europe and Asia, it has been introduced to North America and Australia. It was initially described as Boletus bovinus by Carl Linnaeus in 1753, and given its current binomial name by Henri François Anne de Roussel in 1806. It is an edible mushroom, though not highly regarded. The fungus grows in coniferous forests in its native range, and pine plantations elsewhere. It is sometimes parasitised by the related mushroom Gomphidius roseus. S. bovinus produces spore-bearing mushrooms, often in large numbers, each with a convex grey-yellow or ochre cap reaching up to 10 cm (4 in) in diameter, flattening with age. As in other boletes, the cap has spore tubes extending downward from the underside, rather than gills. The pore surface is yellow. The stalk, more slender than those of other Suillus boletes, lacks a ring. (Full article...)", 953);
   ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, "thank", 5);
   ulog_sqlite_set_val(&ctx, 4, ULS_TYPE_TEXT, "you", 3);
   ulog_sqlite_flush(&ctx);
