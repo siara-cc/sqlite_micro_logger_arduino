@@ -163,7 +163,7 @@ void init_btree_page(byte *ptr) {
 void write_rec_len_rowid_hdr_len(byte *ptr, uint16_t rec_len, uint32_t rowid, uint16_t hdr_len) {
   // write record len
   *ptr++ = 0x80 + (rec_len >> 14);
-  *ptr++ = 0x80 + ((rec_len & 0x3F) >> 7);
+  *ptr++ = 0x80 + ((rec_len >> 7) & 0x7F);
   *ptr++ = rec_len & 0x7F;
   // write row id
   ptr += write_vint32(ptr, rowid);
@@ -178,6 +178,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
 
   // 100 byte header - refer https://www.sqlite.org/fileformat.html
   byte *buf = (byte *) ctx->buf;
+  //memcpy(buf, "uLogger SQLite3\0", 16);
   memcpy(buf, "SQLite format 3\0", 16);
   write_uint16(buf + 16, page_size);
   buf[18] = 1;
@@ -250,6 +251,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   ctx->cur_page = 1;
   ctx->cur_rowid = 0;
   init_btree_page(ctx->buf);
+  ulog_sqlite_new_row(ctx);
 
 }
 
@@ -274,15 +276,17 @@ int ulog_sqlite_init(struct ulog_sqlite_context *ctx) {
   return ulog_sqlite_init_with_script(ctx, 0, 0);
 }
 
+#define FIXED_LEN_OF_REC_LEN 3
+#define FIXED_LEN_OF_HDR_LEN 2
 int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
 
   ctx->cur_rowid++;
   byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 0 : 100);
   int rec_count = read_uint16(ptr + 3) + 1;
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
-  uint16_t len_of_rec_len_rowid = 3 + get_sizeof_vint32(ctx->cur_rowid);
+  uint16_t len_of_rec_len_rowid = FIXED_LEN_OF_REC_LEN + get_sizeof_vint32(ctx->cur_rowid);
   uint16_t new_rec_len = ctx->col_count;
-  new_rec_len += 2; // 3 for record len and 2 for header len
+  new_rec_len += FIXED_LEN_OF_HDR_LEN;
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0)
     last_pos = page_size - ctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
@@ -301,10 +305,11 @@ int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
 
   memset(ctx->buf + last_pos, '\0', new_rec_len + len_of_rec_len_rowid);
   write_rec_len_rowid_hdr_len(ctx->buf + last_pos, new_rec_len, 
-                              ctx->cur_rowid, ctx->col_count + 2);
+                              ctx->cur_rowid, ctx->col_count + FIXED_LEN_OF_HDR_LEN);
   write_uint16(ptr + 3, rec_count);
   write_uint16(ptr + 5, last_pos);
   write_uint16(ptr + 8 - 2 + (rec_count * 2), last_pos);
+  ctx->flush_flag = 0xA5;
 
   return 0;
 }
@@ -323,10 +328,11 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
                         &data_ptr, &rec_len, &hdr_len);
   int8_t cur_len_of_len;
   uint16_t cur_len = get_data_len(read_vint32(hdr_ptr, &cur_len_of_len));
-  int32_t diff = len - cur_len;
+  uint16_t new_len = type == ULS_TYPE_REAL ? 8 : len;
+  int32_t diff = new_len - cur_len;
   if (rec_len + diff + 2 > page_size - ctx->page_resv_bytes)
     return ULS_RES_TOO_LONG;
-  uint16_t new_last_pos = last_pos + cur_len - len - 2;
+  uint16_t new_last_pos = last_pos + cur_len - new_len - FIXED_LEN_OF_HDR_LEN;
   if (new_last_pos < (ptr - ctx->buf) + 8 + rec_count * 2) {
     (ctx->seek_fn)(ctx->cur_page * page_size);
     (ctx->write_fn)(ctx->buf, page_size);
@@ -336,7 +342,7 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
             ctx->buf + last_pos, rec_len);
     hdr_ptr -= last_pos;
     data_ptr -= last_pos;
-    last_pos = page_size - ctx->page_resv_bytes - rec_len - 3;
+    last_pos = page_size - ctx->page_resv_bytes - rec_len - FIXED_LEN_OF_REC_LEN;
     hdr_ptr += last_pos;
     data_ptr += last_pos;
     rec_count = 1;
@@ -363,10 +369,34 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
         break;
     }
   } else
+  if (type == ULS_TYPE_REAL && len == 4) {
+    // Assume float and double are already IEEE-754 format
+    union FPSinglePrecIEEE754 {
+      struct {
+        unsigned int mantissa : 23;
+        unsigned int exponent : 8;
+        unsigned int sign : 1;
+      } bits;
+      byte raw[4];
+    } fnumber;
+    union FPDoublePrecIEEE754 {
+      struct {
+        uint64_t mantissa : 52;
+        unsigned int exponent : 11;
+        unsigned int sign : 1;
+      } bits;
+      byte raw[8];
+    } dnumber;
+    memcpy(&fnumber, val, 4);
+    dnumber.bits.mantissa = fnumber.bits.mantissa;
+    dnumber.bits.exponent = fnumber.bits.exponent;
+    dnumber.bits.sign = fnumber.bits.sign;
+    memcpy(data_ptr, &dnumber, 8);
+  } else
     memcpy(data_ptr, val, len);
 
   // make (or reduce) space and copy len
-  uint32_t new_type_or_len = derive_col_type_or_len(type, val, len);
+  uint32_t new_type_or_len = derive_col_type_or_len(type, val, new_len);
   int8_t new_len_of_len = get_sizeof_vint32(new_type_or_len);
   int8_t hdr_diff = new_len_of_len -  cur_len_of_len;
   diff += hdr_diff;
@@ -382,6 +412,7 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
   write_uint16(ptr + 5, new_last_pos);
   rec_count--;
   write_uint16(ptr + 8 + rec_count * 2, new_last_pos);
+  ctx->flush_flag = 0xA5;
 
   return ULS_RES_OK;
 }
@@ -390,89 +421,48 @@ int ulog_sqlite_flush(struct ulog_sqlite_context *ctx) {
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
   (ctx->seek_fn)(ctx->cur_page * page_size);
   (ctx->write_fn)(ctx->buf, page_size);
-  return ctx->flush_fn();
+  int ret = ctx->flush_fn();
+  if (!ret)
+    ctx->flush_flag = 0;
+  return ret;
 }
 
+// root_page = 2 and prefix = "uLogger SQLite3" -> logging data
+// root_page = x and prefix = "uLogger SQLite3" -> finalizing, x is last data page
+// root_page = x and prefix = "SQLite format 3" -> finalize complete
 int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
-  // close row
-  // write last row
-  // update last page into first page
+
+  uint16_t page_size = get_pagesize(ctx->page_size_exp);
+  byte to_write_page1 = 0;
+  if (ctx->flush_flag == 0xA5) {
+    ulog_sqlite_flush(ctx);
+    to_write_page1 = 1;
+  }
+
+  (ctx->seek_fn)(0);
+  (ctx->read_fn)(ctx->buf, page_size);
+  if (memcmp(ctx->buf, "SQLite format 3", 15) == 0)
+    return ULS_RES_OK;
+
+  if (to_write_page1) {
+    write_uint32(ctx->buf + 28, ctx->cur_page);
+    (ctx->seek_fn)(0);
+    (ctx->write_fn)(ctx->buf, page_size);
+  }
+
+  // if root page already in Page1
+  //   Nothing to do
+  // else
+  //   update last page into first page
   // write parent nodes recursively
   // update root page and db size into first page
   //write_uint32(buf + 28, 0); // DB Size
   return 0;
 }
 
-int ulog_sqlite_recover(struct ulog_sqlite_context *ctx, void *another_buf) {
+int ulog_sqlite_check(struct ulog_sqlite_context *ctx) {
   // check if last page number available
   // if not, locate last leaf page from end
   // continue from (3) of finalize
   return 0;
 }
-
-#ifndef ARDUINO
-#ifndef TEST_CASE
-
-#include <stdio.h>
-
-FILE *file_ptr;
-
-int read_fn(void *buf, size_t len) {
-  size_t ret = fread(buf, len, 1, file_ptr);
-  if (ret != len)
-    return ULS_RES_ERR;
-  return ULS_RES_OK;
-}
-
-int write_fn(void *buf, size_t len) {
-  size_t ret = fwrite(buf, len, 1, file_ptr);
-  if (ret != len)
-    return ULS_RES_ERR;
-  return ULS_RES_OK;
-}
-
-int seek_fn(long pos) {
-  return fseek(file_ptr, pos, SEEK_SET);
-}
-
-int flush_fn() {
-  return fflush(file_ptr);
-}
-
-int main() {
-
-  byte buf[4096];
-  struct ulog_sqlite_context ctx;
-  ctx.buf = buf;
-  ctx.col_count = 5;
-  ctx.page_size_exp = 12;
-  ctx.max_pages_exp = 0;
-  ctx.read_fn = read_fn;
-  ctx.write_fn = write_fn;
-  ctx.seek_fn = seek_fn;
-  ctx.flush_fn = flush_fn;
-
-  file_ptr = fopen("hello.db", "wb");
-
-  ulog_sqlite_init(&ctx);
-  ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_TEXT, "Hello", 5);
-  ulog_sqlite_set_val(&ctx, 1, ULS_TYPE_TEXT, "World", 5);
-  ulog_sqlite_set_val(&ctx, 2, ULS_TYPE_TEXT, "How", 3);
-  ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, "Are", 3);
-  ulog_sqlite_set_val(&ctx, 4, ULS_TYPE_TEXT, "You", 3);
-  ulog_sqlite_new_row(&ctx);
-  ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_TEXT, "I", 1);
-  ulog_sqlite_set_val(&ctx, 1, ULS_TYPE_TEXT, "am", 2);
-  ulog_sqlite_set_val(&ctx, 2, ULS_TYPE_TEXT, "fine", 4);
-  //ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, "Suillus bovinus, the Jersey cow mushroom, is a pored mushroom in the family Suillaceae. A common fungus native to Europe and Asia, it has been introduced to North America and Australia. It was initially described as Boletus bovinus by Carl Linnaeus in 1753, and given its current binomial name by Henri François Anne de Roussel in 1806. It is an edible mushroom, though not highly regarded. The fungus grows in coniferous forests in its native range, and pine plantations elsewhere. It is sometimes parasitised by the related mushroom Gomphidius roseus. S. bovinus produces spore-bearing mushrooms, often in large numbers, each with a convex grey-yellow or ochre cap reaching up to 10 cm (4 in) in diameter, flattening with age. As in other boletes, the cap has spore tubes extending downward from the underside, rather than gills. The pore surface is yellow. The stalk, more slender than those of other Suillus boletes, lacks a ring. (Full article...)", 953);
-  ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, "thank", 5);
-  ulog_sqlite_set_val(&ctx, 4, ULS_TYPE_TEXT, "you", 3);
-  ulog_sqlite_flush(&ctx);
-
-  fclose(file_ptr);
-
-  return 0;
-
-}
-#endif
-#endif

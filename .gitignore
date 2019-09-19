@@ -1,6 +1,8 @@
 .vscode
 .DS_Store
+a.out
 *.db
+src/a.out
 src/*.db
 src/.DS_Store
 src/ulog_sqlite
