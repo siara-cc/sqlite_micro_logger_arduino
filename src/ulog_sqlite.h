@@ -9,8 +9,8 @@ extern "C" {
 #include <stdint.h>
 
 typedef unsigned char byte;
-typedef int (*ulog_sqlite_read_fn)(void *buf, size_t len);
-typedef int (*ulog_sqlite_write_fn)(void *buf, size_t len);
+typedef int32_t (*ulog_sqlite_read_fn)(void *buf, size_t len);
+typedef int32_t (*ulog_sqlite_write_fn)(void *buf, size_t len);
 typedef int (*ulog_sqlite_seek_fn)(long pos);
 typedef int (*ulog_sqlite_flush_fn)();
 
@@ -25,8 +25,8 @@ struct ulog_sqlite_context {
   byte max_pages_exp; // Maximum data pages (as exponent of 2)
                       // after which to roll. 0 means no max.
   byte page_resv_bytes; // Reserved bytes at end of every page (say checksum)
-  ulog_sqlite_read_fn read_fn;
-  ulog_sqlite_write_fn write_fn;
+  ulog_sqlite_read_fn read_fn; // Success if return value == len
+  ulog_sqlite_write_fn write_fn; // Success if return value == len
   ulog_sqlite_seek_fn seek_fn;
   ulog_sqlite_flush_fn flush_fn;
   // following are running values used internally

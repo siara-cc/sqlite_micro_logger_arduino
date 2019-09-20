@@ -5,18 +5,18 @@
 
 FILE *file_ptr;
 
-int read_fn(void *buf, size_t len) {
+int32_t read_fn(void *buf, size_t len) {
   size_t ret = fread(buf, len, 1, file_ptr);
   if (ret != len)
     return ULS_RES_ERR;
-  return ULS_RES_OK;
+  return ret;
 }
 
-int write_fn(void *buf, size_t len) {
+int32_t write_fn(void *buf, size_t len) {
   size_t ret = fwrite(buf, len, 1, file_ptr);
   if (ret != len)
     return ULS_RES_ERR;
-  return ULS_RES_OK;
+  return ret;
 }
 
 int seek_fn(long pos) {

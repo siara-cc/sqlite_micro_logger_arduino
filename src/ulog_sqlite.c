@@ -150,7 +150,7 @@ uint32_t derive_col_type_or_len(int type, void *val, int len) {
   return col_type_or_len;    
 }
 
-void init_btree_page13(byte *ptr) {
+void init_bt_tbl_leaf(byte *ptr) {
 
   ptr[0] = 13; // Leaf table b-tree page
   write_uint16(ptr + 1, 0); // No freeblocks
@@ -160,13 +160,48 @@ void init_btree_page13(byte *ptr) {
 
 }
 
-void init_btree_page5(byte *ptr) {
+void init_bt_tbl_inner(byte *ptr) {
 
   ptr[0] = 5; // Interior table b-tree page
   write_uint16(ptr + 1, 0); // No freeblocks
   write_uint16(ptr + 3, 0); // No records yet
   write_uint16(ptr + 5, 0); // No records yet
   write_uint8(ptr + 7, 0); // Fragmented free bytes
+
+}
+
+int add_rec_to_inner_tbl(struct ulog_sqlite_context *ctx, byte *another_buf, 
+      uint32_t rowid, uint32_t cur_level_pos, byte is_last) {
+
+  uint16_t page_size = get_pagesize(ctx->page_size_exp);
+  uint16_t last_pos = read_uint16(another_buf + 5);
+  int rec_count = read_uint16(another_buf + 3) + 1;
+  byte rec_len = 4 + get_sizeof_vint32(rowid);
+
+  if (last_pos == 0)
+    last_pos = page_size - rec_len;
+  else {
+    // 12 = header, 5 = space for last rowid
+    if (last_pos - rec_len < 12 + 5 + rec_count * 2)
+      last_pos = 0;
+    else
+      last_pos -= rec_len;
+  }
+
+  if (is_last)
+    last_pos = 0;
+  if (last_pos) {
+    write_uint32(another_buf + last_pos, cur_level_pos);
+    write_vint32(another_buf + last_pos + 4, rowid);
+    write_uint16(another_buf + 3, rec_count);
+    write_uint32(another_buf + 5, last_pos);
+  } else {
+    write_uint32(another_buf + 8, cur_level_pos);
+    write_vint32(another_buf + 12 + rec_count * 2, rowid);
+    return 1;
+  }
+
+  return 0;
 
 }
 
@@ -218,7 +253,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   memset(buf + 100, '\0', page_size - 100); // Set remaing page to zero
 
   // master table b-tree
-  init_btree_page13(buf + 100);
+  init_bt_tbl_leaf(buf + 100);
 
   // write table script record
   int orig_col_count = ctx->col_count;
@@ -260,7 +295,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   ctx->col_count = orig_col_count;
   ctx->cur_page = 1;
   ctx->cur_rowid = 0;
-  init_btree_page13(ctx->buf);
+  init_bt_tbl_leaf(ctx->buf);
   ulog_sqlite_new_row(ctx);
 
 }
@@ -307,7 +342,7 @@ int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
       (ctx->seek_fn)(ctx->cur_page * page_size);
       (ctx->write_fn)(ctx->buf, page_size);
       ctx->cur_page++;
-      init_btree_page13(ctx->buf);
+      init_bt_tbl_leaf(ctx->buf);
       last_pos = page_size - ctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
       rec_count = 1;
     }
@@ -347,7 +382,7 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
     (ctx->seek_fn)(ctx->cur_page * page_size);
     (ctx->write_fn)(ctx->buf, page_size);
     ctx->cur_page++;
-    init_btree_page13(ctx->buf);
+    init_bt_tbl_leaf(ctx->buf);
     memmove(ctx->buf + page_size - ctx->page_resv_bytes - rec_len,
             ctx->buf + last_pos, rec_len);
     hdr_ptr -= last_pos;
@@ -443,10 +478,9 @@ int ulog_sqlite_flush(struct ulog_sqlite_context *ctx) {
 int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
 
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
-  byte to_write_page1 = 0;
   if (ctx->flush_flag == 0xA5) {
     ulog_sqlite_flush(ctx);
-    to_write_page1 = 1;
+    ctx->flush_flag = 0xA5;
   }
 
   (ctx->seek_fn)(0);
@@ -454,32 +488,59 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
   if (memcmp(ctx->buf, "SQLite format 3", 15) == 0)
     return ULS_RES_OK;
 
-  if (to_write_page1) {
+  if (ctx->flush_flag == 0xA5) {
     write_uint32(ctx->buf + 28, ctx->cur_page + 1);
     (ctx->seek_fn)(0);
     (ctx->write_fn)(ctx->buf, page_size);
   }
 
-  // if (ctx->cur_page == 1) {
-    //write SQLite format 3
-    // return
-  //}
+  uint32_t next_level_cur_pos = ctx->cur_page + 1;
+  uint32_t next_level_begin_pos = next_level_cur_pos;
+  uint32_t cur_level_pos = 1;
+  do {
+    init_bt_tbl_inner(another_buf);
+    while (cur_level_pos < next_level_begin_pos) {
+      (ctx->seek_fn)(cur_level_pos * page_size);
+      int32_t bytes_read = (ctx->read_fn)(ctx->buf, page_size);
+      if (bytes_read != page_size)
+        break;
+      uint32_t rowid;
+      if (ctx->buf[0] == 13) {
+        uint16_t rec_count = read_uint16(ctx->buf + 3) - 1;
+        uint16_t rec_pos = ctx->buf + 8 + rec_count * 2;
+        int8_t vint_len;
+        read_vint16(ctx->buf + rec_pos, &vint_len);
+        rowid = read_vint32(ctx->buf + rec_pos + 3, &vint_len);
+      } else {
+        int8_t vint_len;
+        rowid = read_vint32(ctx->buf + 12 + read_uint16(ctx->buf + 3) * 2, &vint_len);
+      }
+      byte is_last = (cur_level_pos + 1 == next_level_begin_pos ? 1 : 0);
+      if (add_rec_to_inner_tbl(ctx->buf, another_buf, rowid, cur_level_pos, is_last)) {
+        (ctx->seek_fn)(next_level_cur_pos * page_size);
+        next_level_cur_pos++;
+        (ctx->write_fn)(ctx->buf, page_size);
+        init_bt_tbl_inner(another_buf);
+      }
+      cur_level_pos++;
+    }
+    if (next_level_begin_pos == next_level_cur_pos - 1)
+      break;
+    else {
+      cur_level_pos = next_level_begin_pos;
+      next_level_cur_pos++;
+      next_level_begin_pos = next_level_cur_pos;
+    }
+  } while (true);
 
-  init_btree_page5(another_buf);
-  for (uint32_t leaf = 1; leaf < ctx->cur_page; leaf++) {
-    (ctx->seek_fn)(leaf * page_size);
-    (ctx->read_fn)(ctx->buf, page_size);
-    // if full or last_leaf, write last rowid to right most pointer (keep space for rowid)
-    // else write last rowid to another_page
-    // write another_page, init and continue
+  if (ctx->cur_page == 1) {
+    write_uint32(ctx->buf + 28, ctx->cur_page + 1);
+    memcpy(ctx->buf, "SQLite format 3", 16);
+    (ctx->seek_fn)(0);
+    (ctx->write_fn)(ctx->buf, page_size);
+    return ULS_RES_OK;
   }
-  // write last another_page if not written
 
-  //while (multiple internal another_page) {
-  // for (i = 0; i < last_page; i++) {
-  //   write right-most pointer's rowid to another page
-  // }
-  //}
   //write SQLite format 3
   // update root page and db size into first page
 
