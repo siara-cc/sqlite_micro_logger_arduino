@@ -502,8 +502,10 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
     while (cur_level_pos < next_level_begin_pos) {
       (ctx->seek_fn)(cur_level_pos * page_size);
       int32_t bytes_read = (ctx->read_fn)(ctx->buf, page_size);
-      if (bytes_read != page_size)
+      if (bytes_read != page_size) {
+        cur_level_pos++;
         break;
+      }
       uint32_t rowid;
       if (ctx->buf[0] == 13) {
         uint16_t rec_count = read_uint16(ctx->buf + 3) - 1;
@@ -533,16 +535,17 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
     }
   } while (true);
 
-  if (ctx->cur_page == 1) {
-    write_uint32(ctx->buf + 28, ctx->cur_page + 1);
-    memcpy(ctx->buf, "SQLite format 3", 16);
-    (ctx->seek_fn)(0);
-    (ctx->write_fn)(ctx->buf, page_size);
-    return ULS_RES_OK;
-  }
-
-  //write SQLite format 3
-  // update root page and db size into first page
+  (ctx->seek_fn)(0);
+  (ctx->read_fn)(ctx->buf, page_size);
+  byte *data_ptr;
+  uint16_t rec_len;
+  uint16_t hdr_len;
+  locate_column(ctx->buf + last_pos, 3, &data_ptr, &rec_len, &hdr_len);
+  write_uint32(data_ptr, next_level_begin_pos); // update root_page
+  write_uint32(ctx->buf + 28, next_level_begin_pos); // update page_count
+  memcpy(ctx->buf, "SQLite format 3", 16);
+  (ctx->seek_fn)(0);
+  (ctx->write_fn)(ctx->buf, page_size);
 
   return ULS_RES_OK;
 }
