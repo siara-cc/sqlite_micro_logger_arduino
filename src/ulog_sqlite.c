@@ -54,8 +54,14 @@ uint16_t read_uint16(byte *ptr) {
 }
 
 uint32_t read_uint32(byte *ptr) {
-  return (*ptr << 24) + (ptr[1] << 16)
-            + (ptr[2] << 8) + ptr[3];
+  uint32_t ret;
+  ret = ((uint32_t)*ptr++) << 24;
+  ret += ((uint32_t)*ptr++) << 16;
+  ret += ((uint32_t)*ptr++) << 8;
+  ret += *ptr;
+  //ret = (*ptr << 24) + (ptr[1] << 16)
+  //          + (ptr[2] << 8) + ptr[3];
+  return ret;
 }
 
 uint16_t read_vint16(byte *ptr, int8_t *vlen) {
@@ -126,7 +132,7 @@ byte *locate_column(byte *rec_ptr, int col_idx, byte **pdata_ptr,
   return hdr_ptr;
 }
 
-uint32_t derive_col_type_or_len(int type, void *val, int len) {
+uint32_t derive_col_type_or_len(int type, const void *val, int len) {
   uint32_t col_type_or_len = 0;
   if (val != NULL) {
     switch (type) {
@@ -223,8 +229,8 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
 
   // 100 byte header - refer https://www.sqlite.org/fileformat.html
   byte *buf = (byte *) ctx->buf;
-  memcpy(buf, "uLogSQLite xxxx\0", 16);
-  //memcpy(buf, "SQLite format 3\0", 16);
+  //memcpy(buf, "uLogSQLite xxxx\0", 16);
+  memcpy(buf, "SQLite format 3\0", 16);
   write_uint16(buf + 16, page_size);
   buf[18] = 1;
   buf[19] = 1;
@@ -360,7 +366,7 @@ int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
 }
 
 int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
-              int col_idx, int type, void *val, uint16_t len) {
+              int col_idx, int type, const void *val, uint16_t len) {
 
   byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 0 : 100);
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
@@ -418,17 +424,17 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
     // Assume float and double are already IEEE-754 format
     union FPSinglePrecIEEE754 {
       struct {
-        unsigned int mantissa : 23;
-        unsigned int exponent : 8;
-        unsigned int sign : 1;
+        uint32_t mantissa : 23;
+        uint8_t exponent : 8;
+        uint8_t sign : 1;
       } bits;
       byte raw[4];
     } fnumber;
     union FPDoublePrecIEEE754 {
       struct {
         uint64_t mantissa : 52;
-        unsigned int exponent : 11;
-        unsigned int sign : 1;
+        uint16_t exponent : 11;
+        uint8_t sign : 1;
       } bits;
       byte raw[8];
     } dnumber;
@@ -509,7 +515,7 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
       uint32_t rowid;
       if (ctx->buf[0] == 13) {
         uint16_t rec_count = read_uint16(ctx->buf + 3) - 1;
-        uint16_t rec_pos = ctx->buf + 8 + rec_count * 2;
+        uint16_t rec_pos = 8 + rec_count * 2;
         int8_t vint_len;
         read_vint16(ctx->buf + rec_pos, &vint_len);
         rowid = read_vint32(ctx->buf + rec_pos + 3, &vint_len);
@@ -518,7 +524,7 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
         rowid = read_vint32(ctx->buf + 12 + read_uint16(ctx->buf + 3) * 2, &vint_len);
       }
       byte is_last = (cur_level_pos + 1 == next_level_begin_pos ? 1 : 0);
-      if (add_rec_to_inner_tbl(ctx->buf, another_buf, rowid, cur_level_pos, is_last)) {
+      if (add_rec_to_inner_tbl(ctx, another_buf, rowid, cur_level_pos, is_last)) {
         (ctx->seek_fn)(next_level_cur_pos * page_size);
         next_level_cur_pos++;
         (ctx->write_fn)(ctx->buf, page_size);
@@ -533,14 +539,14 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
       next_level_cur_pos++;
       next_level_begin_pos = next_level_cur_pos;
     }
-  } while (true);
+  } while (1);
 
   (ctx->seek_fn)(0);
   (ctx->read_fn)(ctx->buf, page_size);
   byte *data_ptr;
   uint16_t rec_len;
   uint16_t hdr_len;
-  locate_column(ctx->buf + last_pos, 3, &data_ptr, &rec_len, &hdr_len);
+  locate_column(ctx->buf + read_uint16(ctx->buf + 105), 3, &data_ptr, &rec_len, &hdr_len);
   write_uint32(data_ptr, next_level_begin_pos); // update root_page
   write_uint32(ctx->buf + 28, next_level_begin_pos); // update page_count
   memcpy(ctx->buf, "SQLite format 3", 16);

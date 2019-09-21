@@ -40,7 +40,7 @@ int ulog_sqlite_init_with_script(struct ulog_sqlite_context *ctx,
       char *table_name, char *table_script);
 int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx);
 int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx, int col_idx,
-                          int type, void *val, uint16_t len);
+                          int type, const void *val, uint16_t len);
 int ulog_sqlite_flush(struct ulog_sqlite_context *ctx);
 int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf);
 int ulog_sqlite_check(struct ulog_sqlite_context *ctx);
