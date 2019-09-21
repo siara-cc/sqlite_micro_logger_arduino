@@ -5,25 +5,25 @@
 
 FILE *file_ptr;
 
-int32_t read_fn(void *buf, size_t len) {
+int32_t read_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
   size_t ret = fread(buf, len, 1, file_ptr);
   if (ret != len)
     return ULS_RES_ERR;
   return ret;
 }
 
-int seek_fn(long pos) {
+int seek_fn(struct ulog_sqlite_context *ctx, long pos) {
   return fseek(file_ptr, pos, SEEK_SET);
 }
 
-int32_t write_fn(void *buf, size_t len) {
+int32_t write_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
   size_t ret = fwrite(buf, len, 1, file_ptr);
   if (ret != len)
     return ULS_RES_ERR;
   return ret;
 }
 
-int flush_fn() {
+int flush_fn(struct ulog_sqlite_context *ctx) {
   return fflush(file_ptr);
 }
 
