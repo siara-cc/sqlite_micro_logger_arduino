@@ -105,7 +105,7 @@ uint16_t get_data_len(uint32_t col_type_or_len) {
 uint16_t acquire_last_pos(struct ulog_sqlite_context *ctx, byte *ptr) {
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0) {
-    ulog_sqlite_new_row(ctx);
+    ulog_sqlite_next_row(ctx);
     last_pos = read_uint16(ptr + 5);
   }
   return last_pos;
@@ -263,7 +263,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   int orig_col_count = ctx->col_count;
   ctx->cur_page = 0;
   ctx->col_count = 5;
-  ulog_sqlite_new_row(ctx);
+  ulog_sqlite_next_row(ctx);
   ulog_sqlite_set_val(ctx, 0, ULS_TYPE_TEXT, "table", 5);
   if (table_name == NULL)
     table_name = default_table_name;
@@ -300,7 +300,7 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
   ctx->cur_page = 1;
   ctx->cur_rowid = 0;
   init_bt_tbl_leaf(ctx->buf);
-  ulog_sqlite_new_row(ctx);
+  ulog_sqlite_next_row(ctx);
 
 }
 
@@ -327,7 +327,7 @@ int ulog_sqlite_init(struct ulog_sqlite_context *ctx) {
 
 #define FIXED_LEN_OF_REC_LEN 3
 #define FIXED_LEN_OF_HDR_LEN 2
-int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx) {
+int ulog_sqlite_next_row(struct ulog_sqlite_context *ctx) {
 
   ctx->cur_rowid++;
   byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 0 : 100);

@@ -6,10 +6,10 @@ cmake_minimum_required (VERSION 3.8)
 project ("ulog_sqlite")
 
 #IF(CMAKE_SYSTEM_NAME MATCHES Darwin)
-#    set(CMAKE_C_FLAGS "-DWEBVIEW_COCOA=1")
+#    set(CMAKE_C_FLAGS "-DCOCOA=1")
 #    link_libraries("-framework WebKit -framework AppKit")
 #elseif (CMAKE_SYSTEM_NAME MATCHES Windows)
-#    add_definitions(-DWEBVIEW_WINAPI=1)
+#    add_definitions(-DWINAPI=1)
 #ENDIF(CMAKE_SYSTEM_NAME MATCHES Darwin)
 
 include_directories("src")

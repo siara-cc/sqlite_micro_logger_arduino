@@ -17,12 +17,12 @@ enum {ULS_RES_OK = 0, ULS_RES_ERR = -1, ULS_RES_INV_PAGE_SZ = -2,
 
 struct ulog_sqlite_context {
   byte *buf;
-  int col_count;
+  byte col_count;
   byte page_size_exp; // 9=512, 10=1024 and so on upto 16=65536
   byte max_pages_exp; // Maximum data pages (as exponent of 2)
                       // after which to roll. 0 means no max.
   byte page_resv_bytes; // Reserved bytes at end of every page (say checksum)
-   // Success if return value == len
+  // Success if return value == len
   int32_t (*read_fn)(struct ulog_sqlite_context *ctx, void *buf, size_t len);
   int32_t (*write_fn)(struct ulog_sqlite_context *ctx, void *buf, size_t len);
   int (*seek_fn)(struct ulog_sqlite_context *ctx, long pos);
@@ -37,7 +37,7 @@ struct ulog_sqlite_context {
 int ulog_sqlite_init(struct ulog_sqlite_context *ctx);
 int ulog_sqlite_init_with_script(struct ulog_sqlite_context *ctx,
       char *table_name, char *table_script);
-int ulog_sqlite_new_row(struct ulog_sqlite_context *ctx);
+int ulog_sqlite_next_row(struct ulog_sqlite_context *ctx);
 int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx, int col_idx,
                           int type, const void *val, uint16_t len);
 int ulog_sqlite_flush(struct ulog_sqlite_context *ctx);

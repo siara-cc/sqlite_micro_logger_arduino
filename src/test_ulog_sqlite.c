@@ -2,6 +2,7 @@
 
 #include "ulog_sqlite.h"
 #include <stdio.h>
+#include <string.h>
 
 FILE *file_ptr;
 
@@ -33,7 +34,7 @@ int test_basic() {
   struct ulog_sqlite_context ctx;
   ctx.buf = buf;
   ctx.col_count = 5;
-  ctx.page_size_exp = 9;
+  ctx.page_size_exp = 12;
   ctx.max_pages_exp = 0;
   ctx.read_fn = read_fn;
   ctx.seek_fn = seek_fn;
@@ -48,7 +49,7 @@ int test_basic() {
   ulog_sqlite_set_val(&ctx, 2, ULS_TYPE_TEXT, "How", 3);
   ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, "Are", 3);
   ulog_sqlite_set_val(&ctx, 4, ULS_TYPE_TEXT, "You", 3);
-  ulog_sqlite_new_row(&ctx);
+  ulog_sqlite_next_row(&ctx);
   ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_TEXT, "I", 1);
   ulog_sqlite_set_val(&ctx, 1, ULS_TYPE_TEXT, "am", 2);
   ulog_sqlite_set_val(&ctx, 2, ULS_TYPE_TEXT, "fine", 4);
@@ -63,9 +64,78 @@ int test_basic() {
 
 }
 
-int main() {
+void print_usage() {
+  printf("\nSqlite Micro Logger\n");
+  printf("-------------------\n\n");
+  printf("Sqlite Micro logger is a low memory usage logger that logs records in Sqlite format 3\n\n");
+  printf("Usage\n");
+  printf("-----\n\n");
+  printf("ulog_sqlite -c <db_name.db> <page_size> <col_count> <csv_1> ... <csv_n>\n");
+  printf("    Creates a Sqlite database with the given name and page size\n");
+  printf("        and given records in CSV format\n\n");
+  printf("ulog_sqlite -a <db_name.db> <csv_1> ... <csv_n>\n");
+  printf("    Appends to a Sqlite database created using -c above\n");
+  printf("        with records in CSV format\n\n");
+  printf("ulog_sqlite -f <db_name.db>\n");
+  printf("    Finalizes DB created to be used as a SQLite database\n\n");
+  printf("ulog_sqlite -r\n");
+  printf("    Runs in-built tests\n\n");
+}
 
-  test_basic();
+byte validate_page_size(long page_size) {
+  switch (page_size) {
+    case 512:
+      return 9;
+    case 1024:
+      return 10;
+    case 2048:
+      return 11;
+    case 4096:
+      return 12;
+    case 8192:
+      return 13;
+    case 16384:
+      return 14;
+    case 32768:
+      return 15;
+    case 65536:
+      return 16;
+  }
+  return 0;
+}
+
+int main(int argc, char *argv[]) {
+
+  if (argc > 4 && strcmp(argv[1], "-c") != 0) {
+    long page_size = atol(argv[3]);
+    byte page_size_exp = validate_page_size(page_size);
+    if (!page_size_exp) {
+      printf("Page size should be one of 512, 1024, 2048, 4096, 8192, 16384, 32768 or 65536\n");
+      return 0;
+    }
+    byte col_count = atoi(argv[4]);
+    byte buf[page_size];
+    struct ulog_sqlite_context ctx;
+    ctx.buf = buf;
+    ctx.col_count = col_count;
+    ctx.page_size_exp = page_size_exp;
+    ctx.max_pages_exp = 0;
+    ctx.read_fn = read_fn;
+    ctx.seek_fn = seek_fn;
+    ctx.flush_fn = flush_fn;
+    ctx.write_fn = write_fn;
+    file_ptr = fopen(argv[2], "wb");
+    if (file_ptr == NULL) {
+      perror("Error: ");
+      return -1;
+    }
+    ulog_sqlite_init(&ctx);
+    ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_TEXT, "Hello", 5);
+  } else
+  if (argc == 2 && strcmp(argv[1], "-r") != 0) {
+    test_basic();
+  }
+
   return 0;
 
 }
