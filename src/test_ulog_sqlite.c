@@ -67,12 +67,13 @@ int test_basic() {
 void print_usage() {
   printf("\nSqlite Micro Logger\n");
   printf("-------------------\n\n");
-  printf("Sqlite Micro logger is a low memory usage logger that logs records in Sqlite format 3\n\n");
+  printf("Sqlite Micro logger is a library that logs records in Sqlite format 3\n");
+  printf("using as less memory as possible. This utility is intended for testing it.\n\n");
   printf("Usage\n");
   printf("-----\n\n");
   printf("ulog_sqlite -c <db_name.db> <page_size> <col_count> <csv_1> ... <csv_n>\n");
   printf("    Creates a Sqlite database with the given name and page size\n");
-  printf("        and given records in CSV format\n\n");
+  printf("        and given records in CSV format (no comma in data)\n\n");
   printf("ulog_sqlite -a <db_name.db> <csv_1> ... <csv_n>\n");
   printf("    Appends to a Sqlite database created using -c above\n");
   printf("        with records in CSV format\n\n");
@@ -104,37 +105,115 @@ byte validate_page_size(long page_size) {
   return 0;
 }
 
+int add_col(struct ulog_sqlite_context *ctx, int col_idx, char *data, byte isInt, byte isReal) {
+  if (isInt) {
+    int64_t ival = atoll(data);
+    if (ival >= -128 && ival <= 127) {
+      int8_t i8val = (int8_t) ival;
+      return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_INT, &i8val, 1);
+    } else
+    if (ival >= -32768 && ival <= 32767) {
+      int16_t i16val = (int16_t) ival;
+      return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_INT, &i16val, 2);
+    } else
+    if (ival >= -2147483648 && ival <= 2147483647) {
+      int32_t i32val = (int32_t) ival;
+      return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_INT, &i32val, 4);
+    } else {
+      return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_INT, &ival, 8);
+    }
+  } else
+  if (isReal) {
+    double dval = atof(data);
+    return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_REAL, &dval, 8);
+  }
+  return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_TEXT, data, strlen(data));
+}
+
+int create_db(int argc, char *argv[]) {
+  long page_size = atol(argv[3]);
+  byte page_size_exp = validate_page_size(page_size);
+  if (!page_size_exp) {
+    printf("Page size should be one of 512, 1024, 2048, 4096, 8192, 16384, 32768 or 65536\n");
+    return -1;
+  }
+  byte col_count = atoi(argv[4]);
+  byte buf[page_size];
+  struct ulog_sqlite_context ctx;
+  ctx.buf = buf;
+  ctx.col_count = col_count;
+  ctx.page_size_exp = page_size_exp;
+  ctx.max_pages_exp = 0;
+  ctx.read_fn = read_fn;
+  ctx.seek_fn = seek_fn;
+  ctx.flush_fn = flush_fn;
+  ctx.write_fn = write_fn;
+  file_ptr = fopen(argv[2], "wb");
+  if (file_ptr == NULL) {
+    perror("Error: ");
+    return -2;
+  }
+  if (ulog_sqlite_init(&ctx)) {
+    printf("Error during init\n");
+    return -3;
+  }
+  for (int i = 5; i < argc; i++) {
+    char *col_data = argv[i];
+    char *chr = col_data;
+    int col_idx = 0;
+    byte isInt = 1;
+    byte isReal = 1;
+    while (*chr != '\0') {
+      if (*chr == ',') {
+        *chr = '\0';
+        if (add_col(&ctx, col_idx++, col_data, isInt, isReal)) {
+          printf("Error during add col\n");
+          return -4;
+        }
+        chr++;
+        col_data = chr;
+        isInt = 1;
+        isReal = 1;
+        continue;
+      }
+      if ((*chr <= '0' || *chr >= '9') && *chr != '-' && *chr != '.') {
+        isInt = 0;
+        isReal = 0;
+      } else {
+        if (*chr == '.')
+          isInt = 0;
+      }
+      chr++;
+    }
+    if (add_col(&ctx, col_idx++, col_data, isInt, isReal)) {
+      printf("Error during add col\n");
+      return -4;
+    }
+    if (i < argc - 1) {
+      if (ulog_sqlite_next_row(&ctx)) {
+        printf("Error during add col\n");
+        return -5;
+      }
+    }
+  }
+  byte another_buf[page_size];
+  if (ulog_sqlite_finalize(&ctx, another_buf)) {
+    printf("Error during finalize\n");
+    return -6;
+  }
+  return 0;
+}
+
 int main(int argc, char *argv[]) {
 
-  if (argc > 4 && strcmp(argv[1], "-c") != 0) {
-    long page_size = atol(argv[3]);
-    byte page_size_exp = validate_page_size(page_size);
-    if (!page_size_exp) {
-      printf("Page size should be one of 512, 1024, 2048, 4096, 8192, 16384, 32768 or 65536\n");
-      return 0;
-    }
-    byte col_count = atoi(argv[4]);
-    byte buf[page_size];
-    struct ulog_sqlite_context ctx;
-    ctx.buf = buf;
-    ctx.col_count = col_count;
-    ctx.page_size_exp = page_size_exp;
-    ctx.max_pages_exp = 0;
-    ctx.read_fn = read_fn;
-    ctx.seek_fn = seek_fn;
-    ctx.flush_fn = flush_fn;
-    ctx.write_fn = write_fn;
-    file_ptr = fopen(argv[2], "wb");
-    if (file_ptr == NULL) {
-      perror("Error: ");
-      return -1;
-    }
-    ulog_sqlite_init(&ctx);
-    ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_TEXT, "Hello", 5);
+  printf("%d, %s", argc, argv[1]);
+  if (argc > 4 && strcmp(argv[1], "-c") == 0) {
+    create_db(argc, argv);
   } else
-  if (argc == 2 && strcmp(argv[1], "-r") != 0) {
+  if (argc == 2 && strcmp(argv[1], "-r") == 0) {
     test_basic();
-  }
+  } else
+    print_usage();
 
   return 0;
 

@@ -24,4 +24,6 @@ src/Release
 WIN32/*
 src/*.db
 src/.DS_Store
+src/*.dSYM
+src/test_ulog_sqlite
 
