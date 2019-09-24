@@ -427,14 +427,23 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
     }
   } else
   if (type == ULS_TYPE_REAL && len == 4) {
-    // TODO: Test in big/little/mix endian architectures
+    // Assumes float is represented in IEEE-754
     uint32_t bytes = *((uint32_t *) val);
+    uint8_t exp8 = (bytes >> 23) & 0xFF;
+    uint16_t exp11 = exp8;
+    if (exp11 != 0) {
+      if (exp11 < 127)
+        exp11 = 1023 - (127 - exp11);
+      else
+        exp11 = 1023 + (exp11 - 127);
+    }
     uint64_t bytes64 = ((uint64_t)(bytes >> 31) << 63) 
-       | ((uint64_t)((bytes >> 23) & 0xFF) << 52) | (bytes & 0x7FFFFF);
+       | ((uint64_t)exp11 << 52)
+       | ((uint64_t)(bytes & 0x7FFFFF) << (52-23) );
     write_uint64(data_ptr, bytes64);
   } else
   if (type == ULS_TYPE_REAL && len == 8) {
-    // TODO: Test in big/little/mix endian architectures
+    // Assumes double is represented in IEEE-754
     uint64_t bytes = *((uint64_t *) val);
     write_uint64(data_ptr, bytes);
   } else

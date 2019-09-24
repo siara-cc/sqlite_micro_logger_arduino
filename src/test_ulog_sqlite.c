@@ -145,7 +145,8 @@ int add_col(struct ulog_sqlite_context *ctx, int col_idx, char *data, byte isInt
   } else
   if (isReal) {
     float dval = atof(data);
-    printf("%f\n", dval);
+    //double dval = atof(data);
+    printf("%lf\n", dval);
     return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_REAL, &dval, sizeof(dval));
   }
   return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_TEXT, data, strlen(data));
