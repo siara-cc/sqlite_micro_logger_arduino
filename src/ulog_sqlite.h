@@ -13,7 +13,8 @@ typedef unsigned char byte;
 enum {ULS_TYPE_INT = 1, ULS_TYPE_REAL, ULS_TYPE_BLOB, ULS_TYPE_TEXT};
 
 enum {ULS_RES_OK = 0, ULS_RES_ERR = -1, ULS_RES_INV_PAGE_SZ = -2, 
-      ULS_RES_TOO_LONG = -3, ULS_RES_IO_ERR = -4};
+      ULS_RES_TOO_LONG = -3, ULS_RES_SEEK_ERR = -4, ULS_RES_READ_ERR = -5,
+      ULS_RES_WRITE_ERR = -6, ULS_RES_FLUSH_ERR = -7};
 
 struct ulog_sqlite_context {
   byte *buf;
@@ -31,7 +32,7 @@ struct ulog_sqlite_context {
   uint32_t cur_page;
   uint32_t cur_rowid;
   byte flush_flag;
-  int errno;
+  int err_no;
 };
 
 int ulog_sqlite_init(struct ulog_sqlite_context *ctx);

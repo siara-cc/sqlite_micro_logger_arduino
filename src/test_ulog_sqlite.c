@@ -2,33 +2,52 @@
 
 #include "ulog_sqlite.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
-FILE *file_ptr;
+int fd;
 
 int32_t read_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
-  size_t ret = fread(buf, len, 1, file_ptr);
-  if (ret != len)
-    return ULS_RES_ERR;
+  ssize_t ret = read(fd, buf, len);
+  if (ret == -1) {
+    ctx->err_no = errno;
+    return ULS_RES_READ_ERR;
+  }
   return ret;
 }
 
 int seek_fn(struct ulog_sqlite_context *ctx, long pos) {
-  return fseek(file_ptr, pos, SEEK_SET);
+  off_t ret = lseek(fd, pos, SEEK_SET);
+  if (ret == -1) {
+    ctx->err_no = errno;
+    return ULS_RES_SEEK_ERR;
+  }
+  return ULS_RES_OK;
 }
 
 int32_t write_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
-  size_t ret = fwrite(buf, len, 1, file_ptr);
-  if (ret != len)
-    return ULS_RES_ERR;
+  ssize_t ret = write(fd, buf, len);
+  if (ret == -1) {
+    ctx->err_no = errno;
+    return ULS_RES_WRITE_ERR;
+  }
   return ret;
 }
 
 int flush_fn(struct ulog_sqlite_context *ctx) {
-  return fflush(file_ptr);
+  int ret = fsync(fd);
+  if (ret == -1) {
+    ctx->err_no = errno;
+    return ULS_RES_FLUSH_ERR;
+  }
+  return ULS_RES_OK;
 }
 
-int test_basic() {
+int test_basic(char *filename) {
 
   byte buf[512];
   struct ulog_sqlite_context ctx;
@@ -41,7 +60,8 @@ int test_basic() {
   ctx.flush_fn = flush_fn;
   ctx.write_fn = write_fn;
 
-  file_ptr = fopen("hello.db", "wb");
+  unlink(filename);
+  fd = open(filename, O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
 
   ulog_sqlite_init(&ctx);
   ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_TEXT, "Hello", 5);
@@ -58,7 +78,7 @@ int test_basic() {
   ulog_sqlite_set_val(&ctx, 4, ULS_TYPE_TEXT, "you", 3);
   ulog_sqlite_flush(&ctx);
 
-  fclose(file_ptr);
+  close(fd);
 
   return 0;
 
@@ -124,8 +144,9 @@ int add_col(struct ulog_sqlite_context *ctx, int col_idx, char *data, byte isInt
     }
   } else
   if (isReal) {
-    double dval = atof(data);
-    return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_REAL, &dval, 8);
+    float dval = atof(data);
+    printf("%f\n", dval);
+    return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_REAL, &dval, sizeof(dval));
   }
   return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_TEXT, data, strlen(data));
 }
@@ -148,9 +169,10 @@ int create_db(int argc, char *argv[]) {
   ctx.seek_fn = seek_fn;
   ctx.flush_fn = flush_fn;
   ctx.write_fn = write_fn;
-  file_ptr = fopen(argv[2], "wb");
-  if (file_ptr == NULL) {
-    perror("Error: ");
+  unlink(argv[2]);
+  fd = open(argv[2], O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  if (fd == -1) {
+    perror("Error");
     return -2;
   }
   if (ulog_sqlite_init(&ctx)) {
@@ -176,7 +198,7 @@ int create_db(int argc, char *argv[]) {
         isReal = 1;
         continue;
       }
-      if ((*chr <= '0' || *chr >= '9') && *chr != '-' && *chr != '.') {
+      if ((*chr < '0' || *chr > '9') && *chr != '-' && *chr != '.') {
         isInt = 0;
         isReal = 0;
       } else {
@@ -206,12 +228,11 @@ int create_db(int argc, char *argv[]) {
 
 int main(int argc, char *argv[]) {
 
-  printf("%d, %s", argc, argv[1]);
   if (argc > 4 && strcmp(argv[1], "-c") == 0) {
     create_db(argc, argv);
   } else
   if (argc == 2 && strcmp(argv[1], "-r") == 0) {
-    test_basic();
+    test_basic("hello.db");
   } else
     print_usage();
 

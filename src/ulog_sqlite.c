@@ -2,7 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
-
+#include <stdio.h>
 int8_t get_sizeof_vint16(uint16_t vint) {
   return vint > 16383 ? 3 : (vint > 127 ? 2 : 1);
 }
@@ -135,11 +135,12 @@ uint32_t derive_col_type_or_len(int type, const void *val, int len) {
   if (val != NULL) {
     switch (type) {
       case ULS_TYPE_INT:
-        if (len == 1) {
-          int8_t *typed_val = (int8_t *) val;
-          col_type_or_len = (*typed_val == 0 ? 8 : (*typed_val == 1 ? 9 : 0));
-        } else
-          col_type_or_len = (len == 2 ? 2 : (len == 4 ? 4 : 6));
+        col_type_or_len = (len == 1 ? 1 : (len == 2 ? 2 : (len == 4 ? 4 : 6)));
+        //if (len == 1) {
+        //  int8_t *typed_val = (int8_t *) val;
+        //  col_type_or_len = (*typed_val == 0 ? 8 : (*typed_val == 1 ? 9 : 0));
+        //} else
+        //  col_type_or_len = (len == 2 ? 2 : (len == 4 ? 4 : 6));
         break;
       case ULS_TYPE_REAL:
         col_type_or_len = 7;
@@ -223,7 +224,7 @@ void write_rec_len_rowid_hdr_len(byte *ptr, uint16_t rec_len, uint32_t rowid, ui
 
 char default_table_name[] = "t1";
 
-void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_name, char *table_script) {
+int form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_name, char *table_script) {
 
   // 100 byte header - refer https://www.sqlite.org/fileformat.html
   byte *buf = (byte *) ctx->buf;
@@ -294,13 +295,17 @@ void form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_
       *script_pos++ = (i == orig_col_count ? ')' : ',');
     }
   }
-  (ctx->seek_fn)(ctx, 0);
-  (ctx->write_fn)(ctx, ctx->buf, page_size);
+  if ((ctx->seek_fn)(ctx, 0))
+    return ULS_RES_SEEK_ERR;
+  if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+    return ULS_RES_WRITE_ERR;
   ctx->col_count = orig_col_count;
   ctx->cur_page = 1;
   ctx->cur_rowid = 0;
   init_bt_tbl_leaf(ctx->buf);
   ulog_sqlite_next_row(ctx);
+
+  return ULS_RES_OK;
 
 }
 
@@ -312,8 +317,7 @@ int create_page1(struct ulog_sqlite_context *ctx,
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
   write_uint16(buf + 16, page_size);
   ctx->cur_rowid = 0;
-  form_page1(ctx, page_size, table_name, table_script);
-  return ULS_RES_OK;
+  return form_page1(ctx, page_size, table_name, table_script);
 }
 
 int ulog_sqlite_init_with_script(struct ulog_sqlite_context *ctx, 
@@ -343,8 +347,10 @@ int ulog_sqlite_next_row(struct ulog_sqlite_context *ctx) {
     last_pos -= new_rec_len;
     last_pos -= len_of_rec_len_rowid;
     if (last_pos < (ptr - ctx->buf) + 8 + rec_count * 2) {
-      (ctx->seek_fn)(ctx, ctx->cur_page * page_size);
-      (ctx->write_fn)(ctx, ctx->buf, page_size);
+      if ((ctx->seek_fn)(ctx, ctx->cur_page * page_size))
+        return ULS_RES_SEEK_ERR;
+      if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+        return ULS_RES_WRITE_ERR;
       ctx->cur_page++;
       init_bt_tbl_leaf(ctx->buf);
       last_pos = page_size - ctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
@@ -383,8 +389,10 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
     return ULS_RES_TOO_LONG;
   uint16_t new_last_pos = last_pos + cur_len - new_len - FIXED_LEN_OF_HDR_LEN;
   if (new_last_pos < (ptr - ctx->buf) + 8 + rec_count * 2) {
-    (ctx->seek_fn)(ctx, ctx->cur_page * page_size);
-    (ctx->write_fn)(ctx, ctx->buf, page_size);
+    if ((ctx->seek_fn)(ctx, ctx->cur_page * page_size))
+      return ULS_RES_SEEK_ERR;
+    if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+      return ULS_RES_WRITE_ERR;
     ctx->cur_page++;
     init_bt_tbl_leaf(ctx->buf);
     memmove(ctx->buf + page_size - ctx->page_resv_bytes - rec_len,
@@ -419,28 +427,16 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
     }
   } else
   if (type == ULS_TYPE_REAL && len == 4) {
-    // Assume float and double are already IEEE-754 format
-    union FPSinglePrecIEEE754 {
-      struct {
-        uint32_t mantissa : 23;
-        uint8_t exponent : 8;
-        uint8_t sign : 1;
-      } bits;
-      byte raw[4];
-    } fnumber;
-    union FPDoublePrecIEEE754 {
-      struct {
-        uint64_t mantissa : 52;
-        uint16_t exponent : 11;
-        uint8_t sign : 1;
-      } bits;
-      byte raw[8];
-    } dnumber;
-    memcpy(&fnumber, val, 4);
-    dnumber.bits.mantissa = fnumber.bits.mantissa;
-    dnumber.bits.exponent = fnumber.bits.exponent;
-    dnumber.bits.sign = fnumber.bits.sign;
-    memcpy(data_ptr, &dnumber, 8);
+    // TODO: Test in big/little/mix endian architectures
+    uint32_t bytes = *((uint32_t *) val);
+    uint64_t bytes64 = ((uint64_t)(bytes >> 31) << 63) 
+       | ((uint64_t)((bytes >> 23) & 0xFF) << 52) | (bytes & 0x7FFFFF);
+    write_uint64(data_ptr, bytes64);
+  } else
+  if (type == ULS_TYPE_REAL && len == 8) {
+    // TODO: Test in big/little/mix endian architectures
+    uint64_t bytes = *((uint64_t *) val);
+    write_uint64(data_ptr, bytes);
   } else
     memcpy(data_ptr, val, len);
 
@@ -468,8 +464,10 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
 
 int ulog_sqlite_flush(struct ulog_sqlite_context *ctx) {
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
-  (ctx->seek_fn)(ctx, ctx->cur_page * page_size);
-  (ctx->write_fn)(ctx, ctx->buf, page_size);
+  if ((ctx->seek_fn)(ctx, ctx->cur_page * page_size))
+    return ULS_RES_FLUSH_ERR;
+  if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+    return ULS_RES_FLUSH_ERR;
   int ret = ctx->flush_fn(ctx);
   if (!ret)
     ctx->flush_flag = 0;
@@ -487,15 +485,19 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
     ctx->flush_flag = 0xA5;
   }
 
-  (ctx->seek_fn)(ctx, 0);
-  (ctx->read_fn)(ctx, ctx->buf, page_size);
+  if ((ctx->seek_fn)(ctx, 0))
+    return ULS_RES_SEEK_ERR;
+  if ((ctx->read_fn)(ctx, ctx->buf, page_size) != page_size)
+    return ULS_RES_READ_ERR;
   if (memcmp(ctx->buf, "SQLite format 3", 15) == 0)
     return ULS_RES_OK;
 
   if (ctx->flush_flag == 0xA5) {
     write_uint32(ctx->buf + 28, ctx->cur_page + 1);
-    (ctx->seek_fn)(ctx, 0);
-    (ctx->write_fn)(ctx, ctx->buf, page_size);
+    if ((ctx->seek_fn)(ctx, 0))
+      return ULS_RES_SEEK_ERR;
+    if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+      return ULS_RES_WRITE_ERR;
   }
 
   uint32_t next_level_cur_pos = ctx->cur_page + 1;
@@ -504,7 +506,8 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
   do {
     init_bt_tbl_inner(another_buf);
     while (cur_level_pos < next_level_begin_pos) {
-      (ctx->seek_fn)(ctx, cur_level_pos * page_size);
+      if ((ctx->seek_fn)(ctx, cur_level_pos * page_size))
+        return ULS_RES_SEEK_ERR;
       int32_t bytes_read = (ctx->read_fn)(ctx, ctx->buf, page_size);
       if (bytes_read != page_size) {
         cur_level_pos++;
@@ -525,7 +528,8 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
       if (add_rec_to_inner_tbl(ctx, another_buf, rowid, cur_level_pos, is_last)) {
         (ctx->seek_fn)(ctx, next_level_cur_pos * page_size);
         next_level_cur_pos++;
-        (ctx->write_fn)(ctx, another_buf, page_size);
+        if ((ctx->write_fn)(ctx, another_buf, page_size) != page_size)
+          return ULS_RES_WRITE_ERR;
         init_bt_tbl_inner(another_buf);
       }
       cur_level_pos++;
@@ -539,8 +543,10 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
     }
   } while (1);
 
-  (ctx->seek_fn)(ctx, 0);
-  (ctx->read_fn)(ctx, ctx->buf, page_size);
+  if ((ctx->seek_fn)(ctx, 0))
+    return ULS_RES_SEEK_ERR;
+  if ((ctx->read_fn)(ctx, ctx->buf, page_size) != page_size)
+    return ULS_RES_READ_ERR;
   byte *data_ptr;
   uint16_t rec_len;
   uint16_t hdr_len;
@@ -548,8 +554,10 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
   write_uint32(data_ptr, next_level_begin_pos); // update root_page
   write_uint32(ctx->buf + 28, next_level_begin_pos); // update page_count
   memcpy(ctx->buf, "SQLite format 3", 16);
-  (ctx->seek_fn)(ctx, 0);
-  (ctx->write_fn)(ctx, ctx->buf, page_size);
+  if ((ctx->seek_fn)(ctx, 0))
+    return ULS_RES_SEEK_ERR;
+  if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+    return ULS_RES_WRITE_ERR;
 
   return ULS_RES_OK;
 }
