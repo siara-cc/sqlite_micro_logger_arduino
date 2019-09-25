@@ -47,13 +47,60 @@ int flush_fn(struct ulog_sqlite_context *ctx) {
   return ULS_RES_OK;
 }
 
+int test_multilevel(char *filename) {
+
+  int page_size = 512;
+  byte buf[page_size];
+  struct ulog_sqlite_context ctx;
+  ctx.buf = buf;
+  ctx.col_count = 4;
+  ctx.page_size_exp = 9;
+  ctx.max_pages_exp = 0;
+  ctx.read_fn = read_fn;
+  ctx.seek_fn = seek_fn;
+  ctx.flush_fn = flush_fn;
+  ctx.write_fn = write_fn;
+
+  unlink(filename);
+  fd = open(filename, O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+
+  char txt[11];
+  ulog_sqlite_init(&ctx);
+  int max_rows = 5000;
+  for (int i = 0; i < max_rows; i++) {
+    double d = i;
+    d /= 2;
+    ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_INT, &i, sizeof(i));
+    ulog_sqlite_set_val(&ctx, 1, ULS_TYPE_REAL, &d, sizeof(d));
+    d = rand();
+    d /= 1000;
+    ulog_sqlite_set_val(&ctx, 2, ULS_TYPE_REAL, &d, sizeof(d));
+    int txt_len = rand() % 10;
+    for (int j = 0; j < txt_len; j++)
+      txt[j] = 'a' + (char)(rand() % 26);
+    ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, txt, txt_len);
+    if (i < max_rows - 1)
+      ulog_sqlite_next_row(&ctx);
+  }
+  byte another_buf[page_size];
+  if (ulog_sqlite_finalize(&ctx, another_buf)) {
+    printf("Error during finalize\n");
+    return -6;
+  }
+
+  close(fd);
+
+  return 0;
+
+}
+
 int test_basic(char *filename) {
 
   byte buf[512];
   struct ulog_sqlite_context ctx;
   ctx.buf = buf;
   ctx.col_count = 5;
-  ctx.page_size_exp = 12;
+  ctx.page_size_exp = 9;
   ctx.max_pages_exp = 0;
   ctx.read_fn = read_fn;
   ctx.seek_fn = seek_fn;
@@ -144,8 +191,8 @@ int add_col(struct ulog_sqlite_context *ctx, int col_idx, char *data, byte isInt
     }
   } else
   if (isReal) {
-    float dval = atof(data);
-    //double dval = atof(data);
+    //float dval = atof(data);
+    double dval = atof(data);
     printf("%lf\n", dval);
     return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_REAL, &dval, sizeof(dval));
   }
@@ -234,6 +281,7 @@ int main(int argc, char *argv[]) {
   } else
   if (argc == 2 && strcmp(argv[1], "-r") == 0) {
     test_basic("hello.db");
+    test_multilevel("ml.db");
   } else
     print_usage();
 

@@ -195,11 +195,13 @@ int add_rec_to_inner_tbl(struct ulog_sqlite_context *ctx, byte *another_buf,
 
   if (is_last)
     last_pos = 0;
+  cur_level_pos++;
   if (last_pos) {
     write_uint32(another_buf + last_pos, cur_level_pos);
     write_vint32(another_buf + last_pos + 4, rowid);
-    write_uint16(another_buf + 3, rec_count);
-    write_uint32(another_buf + 5, last_pos);
+    write_uint16(another_buf + 3, rec_count--);
+    write_uint16(another_buf + 12 + rec_count * 2, last_pos);
+    write_uint16(another_buf + 5, last_pos);
   } else {
     write_uint32(another_buf + 8, cur_level_pos);
     write_vint32(another_buf + 12 + rec_count * 2, rowid);
@@ -228,8 +230,8 @@ int form_page1(struct ulog_sqlite_context *ctx, int16_t page_size, char *table_n
 
   // 100 byte header - refer https://www.sqlite.org/fileformat.html
   byte *buf = (byte *) ctx->buf;
-  //memcpy(buf, "uLogSQLite xxxx\0", 16);
-  memcpy(buf, "SQLite format 3\0", 16);
+  memcpy(buf, "uLogSQLite xxxx\0", 16);
+  //memcpy(buf, "SQLite format 3\0", 16);
   write_uint16(buf + 16, page_size);
   buf[18] = 1;
   buf[19] = 1;
@@ -329,17 +331,17 @@ int ulog_sqlite_init(struct ulog_sqlite_context *ctx) {
   return ulog_sqlite_init_with_script(ctx, 0, 0);
 }
 
-#define FIXED_LEN_OF_REC_LEN 3
-#define FIXED_LEN_OF_HDR_LEN 2
+#define LEN_OF_REC_LEN 3
+#define LEN_OF_HDR_LEN 2
 int ulog_sqlite_next_row(struct ulog_sqlite_context *ctx) {
 
   ctx->cur_rowid++;
   byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 0 : 100);
   int rec_count = read_uint16(ptr + 3) + 1;
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
-  uint16_t len_of_rec_len_rowid = FIXED_LEN_OF_REC_LEN + get_sizeof_vint32(ctx->cur_rowid);
+  uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_sizeof_vint32(ctx->cur_rowid);
   uint16_t new_rec_len = ctx->col_count;
-  new_rec_len += FIXED_LEN_OF_HDR_LEN;
+  new_rec_len += LEN_OF_HDR_LEN;
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0)
     last_pos = page_size - ctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
@@ -360,7 +362,7 @@ int ulog_sqlite_next_row(struct ulog_sqlite_context *ctx) {
 
   memset(ctx->buf + last_pos, '\0', new_rec_len + len_of_rec_len_rowid);
   write_rec_len_rowid_hdr_len(ctx->buf + last_pos, new_rec_len, 
-                              ctx->cur_rowid, ctx->col_count + FIXED_LEN_OF_HDR_LEN);
+                              ctx->cur_rowid, ctx->col_count + LEN_OF_HDR_LEN);
   write_uint16(ptr + 3, rec_count);
   write_uint16(ptr + 5, last_pos);
   write_uint16(ptr + 8 - 2 + (rec_count * 2), last_pos);
@@ -387,22 +389,30 @@ int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
   int32_t diff = new_len - cur_len;
   if (rec_len + diff + 2 > page_size - ctx->page_resv_bytes)
     return ULS_RES_TOO_LONG;
-  uint16_t new_last_pos = last_pos + cur_len - new_len - FIXED_LEN_OF_HDR_LEN;
+  uint16_t new_last_pos = last_pos + cur_len - new_len - LEN_OF_HDR_LEN;
   if (new_last_pos < (ptr - ctx->buf) + 8 + rec_count * 2) {
+    uint16_t prev_last_pos = read_uint16(ptr + 8 + (rec_count - 2) * 2);
+    write_uint16(ptr + 3, rec_count - 1);
+    write_uint16(ptr + 5, prev_last_pos);
     if ((ctx->seek_fn)(ctx, ctx->cur_page * page_size))
       return ULS_RES_SEEK_ERR;
     if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
       return ULS_RES_WRITE_ERR;
     ctx->cur_page++;
     init_bt_tbl_leaf(ctx->buf);
-    memmove(ctx->buf + page_size - ctx->page_resv_bytes - rec_len,
-            ctx->buf + last_pos, rec_len);
+    int8_t len_of_rowid;
+    read_vint32(ctx->buf + last_pos + 3, &len_of_rowid);
+    memmove(ctx->buf + page_size - ctx->page_resv_bytes 
+            - len_of_rowid - rec_len - LEN_OF_REC_LEN,
+            ctx->buf + last_pos, len_of_rowid + rec_len + LEN_OF_REC_LEN);
     hdr_ptr -= last_pos;
     data_ptr -= last_pos;
-    last_pos = page_size - ctx->page_resv_bytes - rec_len - FIXED_LEN_OF_REC_LEN;
+    last_pos = page_size - ctx->page_resv_bytes - len_of_rowid - rec_len - LEN_OF_REC_LEN;
     hdr_ptr += last_pos;
     data_ptr += last_pos;
     rec_count = 1;
+    write_uint16(ptr + 3, rec_count);
+    write_uint16(ptr + 5, last_pos);
   }
 
   // make (or reduce) space and copy data
@@ -522,17 +532,10 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
         cur_level_pos++;
         break;
       }
-      uint32_t rowid;
-      if (ctx->buf[0] == 13) {
-        uint16_t rec_count = read_uint16(ctx->buf + 3) - 1;
-        uint16_t rec_pos = 8 + rec_count * 2;
-        int8_t vint_len;
-        read_vint16(ctx->buf + rec_pos, &vint_len);
-        rowid = read_vint32(ctx->buf + rec_pos + 3, &vint_len);
-      } else {
-        int8_t vint_len;
-        rowid = read_vint32(ctx->buf + 12 + read_uint16(ctx->buf + 3) * 2, &vint_len);
-      }
+      uint16_t last_pos = read_uint16(ctx->buf + 5);
+      int8_t vint_len;
+      uint32_t rowid = read_vint32(ctx->buf + last_pos + 
+                         (ctx->buf[0] == 13 ? 3 : 4), &vint_len);
       byte is_last = (cur_level_pos + 1 == next_level_begin_pos ? 1 : 0);
       if (add_rec_to_inner_tbl(ctx, another_buf, rowid, cur_level_pos, is_last)) {
         (ctx->seek_fn)(ctx, next_level_cur_pos * page_size);
@@ -547,7 +550,6 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
       break;
     else {
       cur_level_pos = next_level_begin_pos;
-      next_level_cur_pos++;
       next_level_begin_pos = next_level_cur_pos;
     }
   } while (1);
@@ -560,8 +562,8 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
   uint16_t rec_len;
   uint16_t hdr_len;
   locate_column(ctx->buf + read_uint16(ctx->buf + 105), 3, &data_ptr, &rec_len, &hdr_len);
-  write_uint32(data_ptr, next_level_begin_pos); // update root_page
-  write_uint32(ctx->buf + 28, next_level_begin_pos); // update page_count
+  write_uint32(data_ptr, next_level_cur_pos); // update root_page
+  write_uint32(ctx->buf + 28, next_level_cur_pos); // update page_count
   memcpy(ctx->buf, "SQLite format 3", 16);
   if ((ctx->seek_fn)(ctx, 0))
     return ULS_RES_SEEK_ERR;
