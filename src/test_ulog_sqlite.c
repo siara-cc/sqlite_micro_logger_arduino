@@ -66,8 +66,8 @@ int test_multilevel(char *filename) {
 
   char txt[11];
   ulog_sqlite_init(&ctx);
-  int max_rows = 5000;
-  for (int i = 0; i < max_rows; i++) {
+  int32_t max_rows = 1000000;
+  for (int32_t i = 0; i < max_rows; i++) {
     double d = i;
     d /= 2;
     ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_INT, &i, sizeof(i));
