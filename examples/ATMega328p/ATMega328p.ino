@@ -87,7 +87,6 @@ void setup() {
 }
 
 byte buf[512];
-byte another_buf[512];
 
 void loop() {
 
@@ -122,17 +121,17 @@ void loop() {
     ctx.seek_fn = seek_fn;
     ctx.flush_fn = flush_fn;
     ctx.write_fn = write_fn;
-    int res = ulog_sqlite_init(&ctx);
+    int res = uls_write_init(&ctx);
     if (!res) {
       while (num_entries--) {
         for (int i = 0; i < 6; i++) {
           int val = analogRead(A0 + i);
-          res = ulog_sqlite_set_val(&ctx, i, ULS_TYPE_INT, &val, sizeof(int));
+          res = uls_set_col_val(&ctx, i, ULS_TYPE_INT, &val, sizeof(int));
           if (res)
             break;
         }
         if (num_entries) {
-          res = ulog_sqlite_next_row(&ctx);
+          res = uls_create_new_row(&ctx);
           if (res)
             break;
           delay(dly);
@@ -140,7 +139,7 @@ void loop() {
       }
     }
     if (!res)
-      res = ulog_sqlite_finalize(&ctx, another_buf);
+      res = uls_finalize(&ctx);
     myFile.close();
     if (res) {
       Serial.print(F("Err:"));

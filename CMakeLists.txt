@@ -19,6 +19,6 @@ set(SOURCES ${SOURCES} "src/ulog_sqlite.c")
 set(SOURCES ${SOURCES} "src/ulog_sqlite.h")
 
 # Add source to this project's executable.
-add_executable (ulog_sqlite ${SOURCES})
+add_executable (test_ulog_sqlite ${SOURCES})
 
 # TODO: Add tests and install targets if needed.

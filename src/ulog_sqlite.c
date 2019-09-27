@@ -99,7 +99,7 @@ uint16_t get_data_len(uint32_t col_type_or_len) {
   return (col_type_or_len - 12)/2; 
 }
 
-uint16_t acquire_last_pos(struct uls_write_context *ctx, byte *ptr) {
+uint16_t acquire_last_pos(struct uls_write_context *wctx, byte *ptr) {
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0) {
     uls_create_new_row(ctx);
@@ -123,6 +123,8 @@ byte *locate_column(byte *rec_ptr, int col_idx, byte **pdata_ptr,
     uint32_t col_type_or_len = read_vint32(hdr_ptr, &vint_len);
     hdr_ptr += vint_len;
     (*pdata_ptr) += get_data_len(col_type_or_len);
+    if (hdr_ptr > *pdata_ptr)
+      return NULL;
   }
   return hdr_ptr;
 }
@@ -172,10 +174,10 @@ void init_bt_tbl_inner(byte *ptr) {
 
 }
 
-int add_rec_to_inner_tbl(struct uls_write_context *ctx, byte *parent_buf, 
+int add_rec_to_inner_tbl(struct uls_write_context *wctx, byte *parent_buf, 
       uint32_t rowid, uint32_t cur_level_pos, byte is_last) {
 
-  int32_t page_size = get_pagesize(ctx->page_size_exp);
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
   uint16_t last_pos = read_uint16(parent_buf + 5);
   int rec_count = read_uint16(parent_buf + 3) + 1;
   byte rec_len = 4 + get_sizeof_vint32(rowid);
@@ -221,18 +223,19 @@ void write_rec_len_rowid_hdr_len(byte *ptr, uint16_t rec_len, uint32_t rowid, ui
   *ptr = hdr_len & 0x7F;
 }
 
-char default_table_name[] = "t1";
-
-int form_page1(struct uls_write_context *ctx, int32_t page_size, char *table_name, char *table_script) {
+const char default_table_name[] = "t1";
+const char sqlite_sig[] = "SQLite format 3";
+const char uls_sig[] = "uLogSQLite xxxx";
+int form_page1(struct uls_write_context *wctx, int32_t page_size, char *table_name, char *table_script) {
 
   // 100 byte header - refer https://www.sqlite.org/fileformat.html
-  byte *buf = (byte *) ctx->buf;
-  memcpy(buf, "uLogSQLite xxxx\0", 16);
+  byte *buf = (byte *) wctx->buf;
+  memcpy(buf, uls_sig, 16);
   //memcpy(buf, "SQLite format 3\0", 16);
   write_uint16(buf + 16, page_size == 65536 ? 1 : (uint16_t) page_size);
   buf[18] = 1;
   buf[19] = 1;
-  buf[20] = ctx->page_resv_bytes;
+  buf[20] = wctx->page_resv_bytes;
   buf[21] = 64;
   buf[22] = 32;
   buf[23] = 32;
@@ -248,10 +251,13 @@ int form_page1(struct uls_write_context *ctx, int32_t page_size, char *table_nam
   //write_uint16(buf + 52, 0);
   memset(buf + 48, '\0', 8); // Set to zero, above 2
   write_uint32(buf + 56, 1);
-  //write_uint16(buf + 60, 0);
+  // user-version - set to 0xA5xxxxxx where A5 is signature
+  // last 5 bits = wctx->max_pages_exp - set to 0 currently
+  // till it is implemented
+  write_uint16(buf + 60, 0xA5000000);
   //write_uint16(buf + 64, 0);
   //write_uint16(buf + 68, 0);
-  memset(buf + 60, '\0', 32); // Set to zero above 3 + 20 bytes reserved space
+  memset(buf + 60, '\0', 28); // Set to zero above 2 + 20 bytes reserved space
   write_uint32(buf + 92, 105);
   write_uint32(buf + 96, 3016000);
   memset(buf + 100, '\0', page_size - 100); // Set remaing page to zero
@@ -260,9 +266,9 @@ int form_page1(struct uls_write_context *ctx, int32_t page_size, char *table_nam
   init_bt_tbl_leaf(buf + 100);
 
   // write table script record
-  int orig_col_count = ctx->col_count;
-  ctx->cur_write_page = 0;
-  ctx->col_count = 5;
+  int orig_col_count = wctx->col_count;
+  wctx->cur_write_page = 0;
+  wctx->col_count = 5;
   uls_create_new_row(ctx);
   uls_set_col_val(ctx, 0, ULS_TYPE_TEXT, "table", 5);
   if (table_name == NULL)
@@ -273,13 +279,13 @@ int form_page1(struct uls_write_context *ctx, int32_t page_size, char *table_nam
   uls_set_col_val(ctx, 3, ULS_TYPE_INT, &root_page, 4);
   if (table_script) {
     uint16_t script_len = strlen(table_script);
-    if (script_len > page_size - 100 - ctx->page_resv_bytes - 8 - 10)
+    if (script_len > page_size - 100 - wctx->page_resv_bytes - 8 - 10)
       return ULS_RES_TOO_LONG;
     uls_set_col_val(ctx, 4, ULS_TYPE_TEXT, table_script, script_len);
   } else {
     int table_name_len = strlen(table_name);
     int script_len = (13 + table_name_len + 2 + 5 * orig_col_count);
-    if (script_len > page_size - 100 - ctx->page_resv_bytes - 8 - 10)
+    if (script_len > page_size - 100 - wctx->page_resv_bytes - 8 - 10)
       return ULS_RES_TOO_LONG;
     uls_set_col_val(ctx, 4, ULS_TYPE_TEXT, buf + 110, script_len);
     byte *script_pos = buf + page_size - buf[20] - script_len;
@@ -298,116 +304,118 @@ int form_page1(struct uls_write_context *ctx, int32_t page_size, char *table_nam
       *script_pos++ = (i == orig_col_count ? ')' : ',');
     }
   }
-  if ((ctx->seek_fn)(ctx, 0))
+  if ((wctx->seek_fn)(ctx, 0))
     return ULS_RES_SEEK_ERR;
-  if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+  if ((wctx->write_fn)(ctx, wctx->buf, page_size) != page_size)
     return ULS_RES_WRITE_ERR;
-  ctx->col_count = orig_col_count;
-  ctx->cur_write_page = 1;
-  ctx->cur_write_rowid = 0;
-  init_bt_tbl_leaf(ctx->buf);
+  wctx->col_count = orig_col_count;
+  wctx->cur_write_page = 1;
+  wctx->cur_write_rowid = 0;
+  init_bt_tbl_leaf(wctx->buf);
   uls_create_new_row(ctx);
 
   return ULS_RES_OK;
 
 }
 
-int create_page1(struct uls_write_context *ctx, 
+int create_page1(struct uls_write_context *wctx, 
       char *table_name, char *table_script) {
-  if (ctx->page_size_exp < 9 || ctx->page_size_exp > 16)
+  if (wctx->page_size_exp < 9 || wctx->page_size_exp > 16)
     return ULS_RES_INV_PAGE_SZ;
-  byte *buf = (byte *) ctx->buf;
-  int32_t page_size = get_pagesize(ctx->page_size_exp);
-  ctx->cur_write_rowid = 0;
+  byte *buf = (byte *) wctx->buf;
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
+  wctx->cur_write_rowid = 0;
   return form_page1(ctx, page_size, table_name, table_script);
 }
 
-int uls_write_init_with_script(struct uls_write_context *ctx, 
+int uls_write_init_with_script(struct uls_write_context *wctx, 
       char *table_name, char *table_script) {
   return create_page1(ctx, table_name, table_script);
 }
 
-int uls_write_init(struct uls_write_context *ctx) {
+int uls_write_init(struct uls_write_context *wctx) {
   return uls_write_init_with_script(ctx, 0, 0);
 }
 
 #define LEN_OF_REC_LEN 3
 #define LEN_OF_HDR_LEN 2
-int uls_create_new_row(struct uls_write_context *ctx) {
+int uls_create_new_row(struct uls_write_context *wctx) {
 
-  ctx->cur_write_rowid++;
-  byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 0 : 100);
+  wctx->cur_write_rowid++;
+  byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
   int rec_count = read_uint16(ptr + 3) + 1;
-  int32_t page_size = get_pagesize(ctx->page_size_exp);
-  uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_sizeof_vint32(ctx->cur_write_rowid);
-  uint16_t new_rec_len = ctx->col_count;
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
+  uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_sizeof_vint32(wctx->cur_write_rowid);
+  uint16_t new_rec_len = wctx->col_count;
   new_rec_len += LEN_OF_HDR_LEN;
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0)
-    last_pos = page_size - ctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
+    last_pos = page_size - wctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
   else {
     last_pos -= new_rec_len;
     last_pos -= len_of_rec_len_rowid;
-    if (last_pos < (ptr - ctx->buf) + 9 + rec_count * 2) {
-      if ((ctx->seek_fn)(ctx, ctx->cur_write_page * page_size))
+    if (last_pos < (ptr - wctx->buf) + 9 + rec_count * 2) {
+      if ((wctx->seek_fn)(ctx, wctx->cur_write_page * page_size))
         return ULS_RES_SEEK_ERR;
-      if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+      if ((wctx->write_fn)(ctx, wctx->buf, page_size) != page_size)
         return ULS_RES_WRITE_ERR;
-      ctx->cur_write_page++;
-      init_bt_tbl_leaf(ctx->buf);
-      last_pos = page_size - ctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
+      wctx->cur_write_page++;
+      init_bt_tbl_leaf(wctx->buf);
+      last_pos = page_size - wctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
       rec_count = 1;
     }
   }
 
-  memset(ctx->buf + last_pos, '\0', new_rec_len + len_of_rec_len_rowid);
-  write_rec_len_rowid_hdr_len(ctx->buf + last_pos, new_rec_len, 
-                              ctx->cur_write_rowid, ctx->col_count + LEN_OF_HDR_LEN);
+  memset(wctx->buf + last_pos, '\0', new_rec_len + len_of_rec_len_rowid);
+  write_rec_len_rowid_hdr_len(wctx->buf + last_pos, new_rec_len, 
+                              wctx->cur_write_rowid, wctx->col_count + LEN_OF_HDR_LEN);
   write_uint16(ptr + 3, rec_count);
   write_uint16(ptr + 5, last_pos);
   write_uint16(ptr + 8 - 2 + (rec_count * 2), last_pos);
-  ctx->flush_flag = 0xA5;
+  wctx->flush_flag = 0xA5;
 
   return ULS_RES_OK;
 }
 
-int uls_set_col_val(struct uls_write_context *ctx,
+int uls_set_col_val(struct uls_write_context *wctx,
               int col_idx, int type, const void *val, uint16_t len) {
 
-  byte *ptr = ctx->buf + (ctx->buf[0] == 13 ? 0 : 100);
-  int32_t page_size = get_pagesize(ctx->page_size_exp);
+  byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
   uint16_t last_pos = acquire_last_pos(ctx, ptr);
   int rec_count = read_uint16(ptr + 3);
   byte *data_ptr;
   uint16_t rec_len;
   uint16_t hdr_len;
-  byte *hdr_ptr = locate_column(ctx->buf + last_pos, col_idx, 
+  byte *hdr_ptr = locate_column(wctx->buf + last_pos, col_idx, 
                         &data_ptr, &rec_len, &hdr_len);
+  if (hdr_ptr == NULL)
+    return ULS_RES_ROW_MALFORM;
   int8_t cur_len_of_len;
   uint16_t cur_len = get_data_len(read_vint32(hdr_ptr, &cur_len_of_len));
   uint16_t new_len = type == ULS_TYPE_REAL ? 8 : len;
   int32_t diff = new_len - cur_len;
-  if (rec_len + diff + 2 > page_size - ctx->page_resv_bytes)
+  if (rec_len + diff + 2 > page_size - wctx->page_resv_bytes)
     return ULS_RES_TOO_LONG;
   uint16_t new_last_pos = last_pos + cur_len - new_len - LEN_OF_HDR_LEN;
-  if (new_last_pos < (ptr - ctx->buf) + 9 + rec_count * 2) {
+  if (new_last_pos < (ptr - wctx->buf) + 9 + rec_count * 2) {
     uint16_t prev_last_pos = read_uint16(ptr + 8 + (rec_count - 2) * 2);
     write_uint16(ptr + 3, rec_count - 1);
     write_uint16(ptr + 5, prev_last_pos);
-    if ((ctx->seek_fn)(ctx, ctx->cur_write_page * page_size))
+    if ((wctx->seek_fn)(ctx, wctx->cur_write_page * page_size))
       return ULS_RES_SEEK_ERR;
-    if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+    if ((wctx->write_fn)(ctx, wctx->buf, page_size) != page_size)
       return ULS_RES_WRITE_ERR;
-    ctx->cur_write_page++;
-    init_bt_tbl_leaf(ctx->buf);
+    wctx->cur_write_page++;
+    init_bt_tbl_leaf(wctx->buf);
     int8_t len_of_rowid;
-    read_vint32(ctx->buf + last_pos + 3, &len_of_rowid);
-    memmove(ctx->buf + page_size - ctx->page_resv_bytes 
+    read_vint32(wctx->buf + last_pos + 3, &len_of_rowid);
+    memmove(wctx->buf + page_size - wctx->page_resv_bytes 
             - len_of_rowid - rec_len - LEN_OF_REC_LEN,
-            ctx->buf + last_pos, len_of_rowid + rec_len + LEN_OF_REC_LEN);
+            wctx->buf + last_pos, len_of_rowid + rec_len + LEN_OF_REC_LEN);
     hdr_ptr -= last_pos;
     data_ptr -= last_pos;
-    last_pos = page_size - ctx->page_resv_bytes - len_of_rowid - rec_len - LEN_OF_REC_LEN;
+    last_pos = page_size - wctx->page_resv_bytes - len_of_rowid - rec_len - LEN_OF_REC_LEN;
     hdr_ptr += last_pos;
     data_ptr += last_pos;
     rec_count = 1;
@@ -417,8 +425,8 @@ int uls_set_col_val(struct uls_write_context *ctx,
 
   // make (or reduce) space and copy data
   new_last_pos = last_pos - diff;
-  memmove(ctx->buf + new_last_pos, ctx->buf + last_pos,
-          data_ptr - ctx->buf - last_pos);
+  memmove(wctx->buf + new_last_pos, wctx->buf + last_pos,
+          data_ptr - wctx->buf - last_pos);
   data_ptr -= diff;
   if (type == ULS_TYPE_INT) {
     switch (len) {
@@ -465,91 +473,91 @@ int uls_set_col_val(struct uls_write_context *ctx,
   int8_t hdr_diff = new_len_of_len -  cur_len_of_len;
   diff += hdr_diff;
   if (hdr_diff) {
-    memmove(ctx->buf + new_last_pos - hdr_diff, ctx->buf + new_last_pos,
-          hdr_ptr - ctx->buf - last_pos);
+    memmove(wctx->buf + new_last_pos - hdr_diff, wctx->buf + new_last_pos,
+          hdr_ptr - wctx->buf - last_pos);
   }
   write_vint32(hdr_ptr - diff, new_type_or_len);
 
   new_last_pos -= hdr_diff;
-  write_rec_len_rowid_hdr_len(ctx->buf + new_last_pos, rec_len + diff,
-                              ctx->cur_write_rowid, hdr_len + hdr_diff);
+  write_rec_len_rowid_hdr_len(wctx->buf + new_last_pos, rec_len + diff,
+                              wctx->cur_write_rowid, hdr_len + hdr_diff);
   write_uint16(ptr + 5, new_last_pos);
   rec_count--;
   write_uint16(ptr + 8 + rec_count * 2, new_last_pos);
-  ctx->flush_flag = 0xA5;
+  wctx->flush_flag = 0xA5;
 
   return ULS_RES_OK;
 }
 
-int uls_flush(struct uls_write_context *ctx) {
-  int32_t page_size = get_pagesize(ctx->page_size_exp);
-  if ((ctx->seek_fn)(ctx, ctx->cur_write_page * page_size))
+int uls_flush(struct uls_write_context *wctx) {
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
+  if ((wctx->seek_fn)(ctx, wctx->cur_write_page * page_size))
     return ULS_RES_FLUSH_ERR;
-  if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+  if ((wctx->write_fn)(ctx, wctx->buf, page_size) != page_size)
     return ULS_RES_FLUSH_ERR;
-  int ret = ctx->flush_fn(ctx);
+  int ret = wctx->flush_fn(ctx);
   if (!ret)
-    ctx->flush_flag = 0;
+    wctx->flush_flag = 0;
   return ret;
 }
 
 // page_count = 2 and prefix = "uLogSQLite xxxx" -> logging data
 // page_count = x and prefix = "uLogSQLite xxxx" -> finalizing, x is last data page
 // page_count = x and prefix = "SQLite format 3" -> finalize complete
-int uls_finalize(struct uls_write_context *ctx) {
+int uls_finalize(struct uls_write_context *wctx) {
 
-  int32_t page_size = get_pagesize(ctx->page_size_exp);
-  if (ctx->flush_flag == 0xA5) {
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
+  if (wctx->flush_flag == 0xA5) {
     uls_flush(ctx);
-    ctx->flush_flag = 0xA5;
+    wctx->flush_flag = 0xA5;
   }
 
-  if ((ctx->seek_fn)(ctx, 0))
+  if ((wctx->seek_fn)(ctx, 0))
     return ULS_RES_SEEK_ERR;
-  if ((ctx->read_fn)(ctx, ctx->buf, page_size) != page_size)
+  if ((wctx->read_fn)(ctx, wctx->buf, page_size) != page_size)
     return ULS_RES_READ_ERR;
-  if (memcmp(ctx->buf, "SQLite format 3", 15) == 0)
+  if (memcmp(wctx->buf, sqlite_sig, 16) == 0)
     return ULS_RES_OK;
 
-  if (ctx->flush_flag == 0xA5) {
-    write_uint32(ctx->buf + 28, ctx->cur_write_page + 1);
-    if ((ctx->seek_fn)(ctx, 0))
+  if (wctx->flush_flag == 0xA5) {
+    write_uint32(wctx->buf + 28, wctx->cur_write_page + 1);
+    if ((wctx->seek_fn)(ctx, 0))
       return ULS_RES_SEEK_ERR;
-    if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+    if ((wctx->write_fn)(ctx, wctx->buf, page_size) != page_size)
       return ULS_RES_WRITE_ERR;
   }
 
-  uint32_t next_level_cur_pos = ctx->cur_write_page + 1;
+  uint32_t next_level_cur_pos = wctx->cur_write_page + 1;
   uint32_t next_level_begin_pos = next_level_cur_pos;
   uint32_t cur_level_pos = 1;
   do {
-    init_bt_tbl_inner(ctx->buf);
+    init_bt_tbl_inner(wctx->buf);
     while (cur_level_pos < next_level_begin_pos) {
       byte src_buf[12];
-      if ((ctx->seek_fn)(ctx, cur_level_pos * page_size))
+      if ((wctx->seek_fn)(ctx, cur_level_pos * page_size))
         return ULS_RES_SEEK_ERR;
-      if ((ctx->read_fn)(ctx, src_buf, 12) != 12) {
+      if ((wctx->read_fn)(ctx, src_buf, 12) != 12) {
         cur_level_pos++;
         break;
       }
       uint16_t last_pos = read_uint16(src_buf + 5);
       uint8_t page_type = *src_buf;
-      if ((ctx->seek_fn)(ctx, (cur_level_pos * page_size) + last_pos))
+      if ((wctx->seek_fn)(ctx, (cur_level_pos * page_size) + last_pos))
         return ULS_RES_SEEK_ERR;
-      if ((ctx->read_fn)(ctx, src_buf, 12) != 12) {
+      if ((wctx->read_fn)(ctx, src_buf, 12) != 12) {
         cur_level_pos++;
         break;
       }
       int8_t vint_len;
       uint32_t rowid = read_vint32(src_buf + (page_type == 13 ? 3 : 4), &vint_len);
       byte is_last = (cur_level_pos + 1 == next_level_begin_pos ? 1 : 0);
-      if (add_rec_to_inner_tbl(ctx, ctx->buf, rowid, cur_level_pos, is_last)) {
-        if ((ctx->seek_fn)(ctx, next_level_cur_pos * page_size))
+      if (add_rec_to_inner_tbl(ctx, wctx->buf, rowid, cur_level_pos, is_last)) {
+        if ((wctx->seek_fn)(ctx, next_level_cur_pos * page_size))
           return ULS_RES_SEEK_ERR;
         next_level_cur_pos++;
-        if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+        if ((wctx->write_fn)(ctx, wctx->buf, page_size) != page_size)
           return ULS_RES_WRITE_ERR;
-        init_bt_tbl_inner(ctx->buf);
+        init_bt_tbl_inner(wctx->buf);
       }
       cur_level_pos++;
     }
@@ -561,56 +569,107 @@ int uls_finalize(struct uls_write_context *ctx) {
     }
   } while (1);
 
-  if ((ctx->seek_fn)(ctx, 0))
+  if ((wctx->seek_fn)(ctx, 0))
     return ULS_RES_SEEK_ERR;
-  if ((ctx->read_fn)(ctx, ctx->buf, page_size) != page_size)
+  if ((wctx->read_fn)(ctx, wctx->buf, page_size) != page_size)
     return ULS_RES_READ_ERR;
   byte *data_ptr;
   uint16_t rec_len;
   uint16_t hdr_len;
-  locate_column(ctx->buf + read_uint16(ctx->buf + 105), 3, &data_ptr, &rec_len, &hdr_len);
+  if (!locate_column(wctx->buf + read_uint16(wctx->buf + 105), 3, &data_ptr, &rec_len, &hdr_len))
+    return ULS_RES_ROW_MALFORM;
   write_uint32(data_ptr, next_level_cur_pos); // update root_page
-  write_uint32(ctx->buf + 28, next_level_cur_pos); // update page_count
-  memcpy(ctx->buf, "SQLite format 3", 16);
-  if ((ctx->seek_fn)(ctx, 0))
+  write_uint32(wctx->buf + 28, next_level_cur_pos); // update page_count
+  memcpy(wctx->buf, sqlite_sig, 16);
+  if ((wctx->seek_fn)(ctx, 0))
     return ULS_RES_SEEK_ERR;
-  if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
+  if ((wctx->write_fn)(ctx, wctx->buf, page_size) != page_size)
     return ULS_RES_WRITE_ERR;
 
   return ULS_RES_OK;
 }
 
-int uls_not_finalized(struct uls_write_context *ctx) {
+int uls_not_finalized(struct uls_write_context *wctx) {
   // check if last page number available
   // if not, locate last leaf page from end
   // continue from (3) of finalize
   return ULS_RES_OK;
 }
 
-int uls_write_init_for_append(struct uls_write_context *ctx) {
-  return ULS_RES_OK;
-}
-
-int uls_read_init(struct uls_read_context *ctx) {
-  return ULS_RES_OK;
-}
-
-void *uls_get_col_val(struct uls_read_context *ctx, int col_idx, uint16_t *col_type) {
+byte get_page_size_exp(int32_t page_size) {
+  switch (page_size) {
+    case 512:
+      return 9;
+    case 1024:
+      return 10;
+    case 2048:
+      return 11;
+    case 4096:
+      return 12;
+    case 8192:
+      return 13;
+    case 16384:
+      return 14;
+    case 32768:
+      return 15;
+    case 65536:
+      return 16;
+  }
   return 0;
+}
+
+int uls_read_init(struct uls_read_context *rctx) {
+
+  if ((rctx->seek_fn)(ctx, 0))
+    return ULS_RES_SEEK_ERR;
+  if ((rctx->read_fn)(ctx, rctx->buf, 20) != 20)
+    return ULS_RES_WRITE_ERR;
+  if (memcmp(rctx->buf, uls_sig, 64) && memcmp(rctx->buf, sqlite_sig, 64)
+        && read_uint32(rctx->buf + 60) != 0xA5000000)
+    return ULS_RES_INVALID_SIG;
+  int32_t page_size = read_uint16(rctx->buf + 16);
+  rctx->page_size_exp = get_page_size_exp(page_size);
+  if (!rctx->page_size_exp)
+    return ULS_RES_INVALID_SIG;
+
+  if ((rctx->seek_fn)(ctx, 0))
+    return ULS_RES_SEEK_ERR;
+  if ((rctx->read_fn)(ctx, rctx->buf, page_size) != page_size)
+    return ULS_RES_READ_ERR;
+  rctx->cur_page = 1;
+  rctx->cur_rec_pos = read_uint16(rctx->buf + 5);
+
+  return ULS_RES_OK;
+}
+
+void *uls_get_col_val(struct uls_read_context *wctx, int col_idx, uint32_t *col_type) {
+  byte *data_ptr;
+  uint16_t rec_len;
+  uint16_t hdr_len;
+  if (!locate_column(rctx->buf + read_uint16(rctx->buf + 5), col_idx,
+        &data_ptr, &rec_len, &hdr_len))
+    return NULL;
+  int8_t cur_len_of_len;
+  *col_type = read_vint32(hdr_ptr, &cur_len_of_len);
+  return data_ptr;
 }
 
 uint16_t derive_col_len(uint16_t col_type) {
   return 0;
 }
 
-int uls_read_next_row(struct uls_read_context *ctx) {
+int uls_read_next_row(struct uls_read_context *wctx) {
   return ULS_RES_OK;
 }
 
-int uls_bin_srch_row_by_id(struct uls_read_context *ctx, uint32_t rowid) {
+int uls_bin_srch_row_by_id(struct uls_read_context *wctx, uint32_t rowid) {
   return ULS_RES_OK;
 }
 
-int uls_bin_srch_row_by_val(struct uls_read_context *ctx, byte *val, uint16_t len) {
+int uls_bin_srch_row_by_val(struct uls_read_context *wctx, byte *val, uint16_t len) {
+  return ULS_RES_OK;
+}
+
+int uls_write_init_for_append(struct uls_write_context *wctx) {
   return ULS_RES_OK;
 }

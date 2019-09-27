@@ -131,44 +131,25 @@ int test_basic(char *filename) {
 }
 
 void print_usage() {
-  printf("\nSqlite Micro Logger\n");
-  printf("-------------------\n\n");
+  printf("\nTesting Sqlite Micro Logger\n");
+  printf("---------------------------\n\n");
   printf("Sqlite Micro logger is a library that logs records in Sqlite format 3\n");
   printf("using as less memory as possible. This utility is intended for testing it.\n\n");
   printf("Usage\n");
   printf("-----\n\n");
-  printf("ulog_sqlite -c <db_name.db> <page_size> <col_count> <csv_1> ... <csv_n>\n");
+  printf("test_ulog_sqlite -c <db_name.db> <page_size> <col_count> <csv_1> ... <csv_n>\n");
   printf("    Creates a Sqlite database with the given name and page size\n");
   printf("        and given records in CSV format (no comma in data)\n\n");
-  printf("ulog_sqlite -a <db_name.db> <csv_1> ... <csv_n>\n");
+  printf("test_ulog_sqlite -a <db_name.db> <csv_1> ... <csv_n>\n");
   printf("    Appends to a Sqlite database created using -c above\n");
   printf("        with records in CSV format\n\n");
-  printf("ulog_sqlite -f <db_name.db>\n");
-  printf("    Finalizes DB created to be used as a SQLite database\n\n");
-  printf("ulog_sqlite -r\n");
+  printf("test_ulog_sqlite -r\n");
   printf("    Runs pre-defined tests\n\n");
 }
 
-byte validate_page_size(long page_size) {
-  switch (page_size) {
-    case 512:
-      return 9;
-    case 1024:
-      return 10;
-    case 2048:
-      return 11;
-    case 4096:
-      return 12;
-    case 8192:
-      return 13;
-    case 16384:
-      return 14;
-    case 32768:
-      return 15;
-    case 65536:
-      return 16;
-  }
-  return 0;
+extern byte page_size_exp(int32_t page_size);
+byte validate_page_size(int32_t page_size) {
+  return get_page_size_exp(page_size);
 }
 
 int add_col(struct uls_write_context *ctx, int col_idx, char *data, byte isInt, byte isReal) {
@@ -199,7 +180,7 @@ int add_col(struct uls_write_context *ctx, int col_idx, char *data, byte isInt, 
 }
 
 int create_db(int argc, char *argv[]) {
-  long page_size = atol(argv[3]);
+  int32_t page_size = atol(argv[3]);
   byte page_size_exp = validate_page_size(page_size);
   if (!page_size_exp) {
     printf("Page size should be one of 512, 1024, 2048, 4096, 8192, 16384, 32768 or 65536\n");

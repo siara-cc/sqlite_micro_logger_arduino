@@ -11,6 +11,7 @@ Makefile
 *.db
 a.out
 ulog_sqlite
+test_ulog_sqlite
 src/obj
 CMakeFiles
 CMakeCache.txt
