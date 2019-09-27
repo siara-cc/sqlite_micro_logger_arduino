@@ -11,7 +11,7 @@
 
 int fd;
 
-int32_t read_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
+int32_t read_fn(struct uls_write_context *ctx, void *buf, size_t len) {
   ssize_t ret = read(fd, buf, len);
   if (ret == -1) {
     ctx->err_no = errno;
@@ -20,7 +20,7 @@ int32_t read_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
   return ret;
 }
 
-int seek_fn(struct ulog_sqlite_context *ctx, long pos) {
+int seek_fn(struct uls_write_context *ctx, long pos) {
   off_t ret = lseek(fd, pos, SEEK_SET);
   if (ret == -1) {
     ctx->err_no = errno;
@@ -29,7 +29,7 @@ int seek_fn(struct ulog_sqlite_context *ctx, long pos) {
   return ULS_RES_OK;
 }
 
-int32_t write_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
+int32_t write_fn(struct uls_write_context *ctx, void *buf, size_t len) {
   ssize_t ret = write(fd, buf, len);
   if (ret == -1) {
     ctx->err_no = errno;
@@ -38,7 +38,7 @@ int32_t write_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
   return ret;
 }
 
-int flush_fn(struct ulog_sqlite_context *ctx) {
+int flush_fn(struct uls_write_context *ctx) {
   int ret = fsync(fd);
   if (ret == -1) {
     ctx->err_no = errno;
@@ -49,12 +49,12 @@ int flush_fn(struct ulog_sqlite_context *ctx) {
 
 int test_multilevel(char *filename) {
 
-  int page_size = 512;
+  int32_t page_size = 65536;
   byte buf[page_size];
-  struct ulog_sqlite_context ctx;
+  struct uls_write_context ctx;
   ctx.buf = buf;
   ctx.col_count = 4;
-  ctx.page_size_exp = 9;
+  ctx.page_size_exp = 16;
   ctx.max_pages_exp = 0;
   ctx.read_fn = read_fn;
   ctx.seek_fn = seek_fn;
@@ -65,24 +65,24 @@ int test_multilevel(char *filename) {
   fd = open(filename, O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
 
   char txt[11];
-  ulog_sqlite_init(&ctx);
+  uls_write_init(&ctx);
   int32_t max_rows = 1000000;
   for (int32_t i = 0; i < max_rows; i++) {
     double d = i;
     d /= 2;
-    ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_INT, &i, sizeof(i));
-    ulog_sqlite_set_val(&ctx, 1, ULS_TYPE_REAL, &d, sizeof(d));
+    uls_set_col_val(&ctx, 0, ULS_TYPE_INT, &i, sizeof(i));
+    uls_set_col_val(&ctx, 1, ULS_TYPE_REAL, &d, sizeof(d));
     d = rand();
     d /= 1000;
-    ulog_sqlite_set_val(&ctx, 2, ULS_TYPE_REAL, &d, sizeof(d));
+    uls_set_col_val(&ctx, 2, ULS_TYPE_REAL, &d, sizeof(d));
     int txt_len = rand() % 10;
     for (int j = 0; j < txt_len; j++)
       txt[j] = 'a' + (char)(rand() % 26);
-    ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, txt, txt_len);
+    uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, txt, txt_len);
     if (i < max_rows - 1)
-      ulog_sqlite_next_row(&ctx);
+      uls_create_new_row(&ctx);
   }
-  if (ulog_sqlite_finalize(&ctx)) {
+  if (uls_finalize(&ctx)) {
     printf("Error during finalize\n");
     return -6;
   }
@@ -96,7 +96,7 @@ int test_multilevel(char *filename) {
 int test_basic(char *filename) {
 
   byte buf[512];
-  struct ulog_sqlite_context ctx;
+  struct uls_write_context ctx;
   ctx.buf = buf;
   ctx.col_count = 5;
   ctx.page_size_exp = 9;
@@ -109,20 +109,20 @@ int test_basic(char *filename) {
   unlink(filename);
   fd = open(filename, O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
 
-  ulog_sqlite_init(&ctx);
-  ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_TEXT, "Hello", 5);
-  ulog_sqlite_set_val(&ctx, 1, ULS_TYPE_TEXT, "World", 5);
-  ulog_sqlite_set_val(&ctx, 2, ULS_TYPE_TEXT, "How", 3);
-  ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, "Are", 3);
-  ulog_sqlite_set_val(&ctx, 4, ULS_TYPE_TEXT, "You", 3);
-  ulog_sqlite_next_row(&ctx);
-  ulog_sqlite_set_val(&ctx, 0, ULS_TYPE_TEXT, "I", 1);
-  ulog_sqlite_set_val(&ctx, 1, ULS_TYPE_TEXT, "am", 2);
-  ulog_sqlite_set_val(&ctx, 2, ULS_TYPE_TEXT, "fine", 4);
-  //ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, "Suillus bovinus, the Jersey cow mushroom, is a pored mushroom in the family Suillaceae. A common fungus native to Europe and Asia, it has been introduced to North America and Australia. It was initially described as Boletus bovinus by Carl Linnaeus in 1753, and given its current binomial name by Henri François Anne de Roussel in 1806. It is an edible mushroom, though not highly regarded. The fungus grows in coniferous forests in its native range, and pine plantations elsewhere. It is sometimes parasitised by the related mushroom Gomphidius roseus. S. bovinus produces spore-bearing mushrooms, often in large numbers, each with a convex grey-yellow or ochre cap reaching up to 10 cm (4 in) in diameter, flattening with age. As in other boletes, the cap has spore tubes extending downward from the underside, rather than gills. The pore surface is yellow. The stalk, more slender than those of other Suillus boletes, lacks a ring. (Full article...)", 953);
-  ulog_sqlite_set_val(&ctx, 3, ULS_TYPE_TEXT, "thank", 5);
-  ulog_sqlite_set_val(&ctx, 4, ULS_TYPE_TEXT, "you", 3);
-  ulog_sqlite_flush(&ctx);
+  uls_write_init(&ctx);
+  uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, "Hello", 5);
+  uls_set_col_val(&ctx, 1, ULS_TYPE_TEXT, "World", 5);
+  uls_set_col_val(&ctx, 2, ULS_TYPE_TEXT, "How", 3);
+  uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "Are", 3);
+  uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, "You", 3);
+  uls_create_new_row(&ctx);
+  uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, "I", 1);
+  uls_set_col_val(&ctx, 1, ULS_TYPE_TEXT, "am", 2);
+  uls_set_col_val(&ctx, 2, ULS_TYPE_TEXT, "fine", 4);
+  //uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "Suillus bovinus, the Jersey cow mushroom, is a pored mushroom in the family Suillaceae. A common fungus native to Europe and Asia, it has been introduced to North America and Australia. It was initially described as Boletus bovinus by Carl Linnaeus in 1753, and given its current binomial name by Henri François Anne de Roussel in 1806. It is an edible mushroom, though not highly regarded. The fungus grows in coniferous forests in its native range, and pine plantations elsewhere. It is sometimes parasitised by the related mushroom Gomphidius roseus. S. bovinus produces spore-bearing mushrooms, often in large numbers, each with a convex grey-yellow or ochre cap reaching up to 10 cm (4 in) in diameter, flattening with age. As in other boletes, the cap has spore tubes extending downward from the underside, rather than gills. The pore surface is yellow. The stalk, more slender than those of other Suillus boletes, lacks a ring. (Full article...)", 953);
+  uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "thank", 5);
+  uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, "you", 3);
+  uls_flush(&ctx);
 
   close(fd);
 
@@ -171,31 +171,31 @@ byte validate_page_size(long page_size) {
   return 0;
 }
 
-int add_col(struct ulog_sqlite_context *ctx, int col_idx, char *data, byte isInt, byte isReal) {
+int add_col(struct uls_write_context *ctx, int col_idx, char *data, byte isInt, byte isReal) {
   if (isInt) {
     int64_t ival = atoll(data);
     if (ival >= -128 && ival <= 127) {
       int8_t i8val = (int8_t) ival;
-      return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_INT, &i8val, 1);
+      return uls_set_col_val(ctx, col_idx, ULS_TYPE_INT, &i8val, 1);
     } else
     if (ival >= -32768 && ival <= 32767) {
       int16_t i16val = (int16_t) ival;
-      return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_INT, &i16val, 2);
+      return uls_set_col_val(ctx, col_idx, ULS_TYPE_INT, &i16val, 2);
     } else
     if (ival >= -2147483648 && ival <= 2147483647) {
       int32_t i32val = (int32_t) ival;
-      return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_INT, &i32val, 4);
+      return uls_set_col_val(ctx, col_idx, ULS_TYPE_INT, &i32val, 4);
     } else {
-      return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_INT, &ival, 8);
+      return uls_set_col_val(ctx, col_idx, ULS_TYPE_INT, &ival, 8);
     }
   } else
   if (isReal) {
     //float dval = atof(data);
     double dval = atof(data);
     printf("%lf\n", dval);
-    return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_REAL, &dval, sizeof(dval));
+    return uls_set_col_val(ctx, col_idx, ULS_TYPE_REAL, &dval, sizeof(dval));
   }
-  return ulog_sqlite_set_val(ctx, col_idx, ULS_TYPE_TEXT, data, strlen(data));
+  return uls_set_col_val(ctx, col_idx, ULS_TYPE_TEXT, data, strlen(data));
 }
 
 int create_db(int argc, char *argv[]) {
@@ -207,7 +207,7 @@ int create_db(int argc, char *argv[]) {
   }
   byte col_count = atoi(argv[4]);
   byte buf[page_size];
-  struct ulog_sqlite_context ctx;
+  struct uls_write_context ctx;
   ctx.buf = buf;
   ctx.col_count = col_count;
   ctx.page_size_exp = page_size_exp;
@@ -222,7 +222,7 @@ int create_db(int argc, char *argv[]) {
     perror("Error");
     return -2;
   }
-  if (ulog_sqlite_init(&ctx)) {
+  if (uls_write_init(&ctx)) {
     printf("Error during init\n");
     return -3;
   }
@@ -259,13 +259,13 @@ int create_db(int argc, char *argv[]) {
       return -4;
     }
     if (i < argc - 1) {
-      if (ulog_sqlite_next_row(&ctx)) {
+      if (uls_create_new_row(&ctx)) {
         printf("Error during add col\n");
         return -5;
       }
     }
   }
-  if (ulog_sqlite_finalize(&ctx)) {
+  if (uls_finalize(&ctx)) {
     printf("Error during finalize\n");
     return -6;
   }
