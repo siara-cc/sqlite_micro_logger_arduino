@@ -175,12 +175,12 @@ void init_bt_tbl_inner(byte *ptr) {
 
 }
 
-int add_rec_to_inner_tbl(struct ulog_sqlite_context *ctx, byte *another_buf, 
+int add_rec_to_inner_tbl(struct ulog_sqlite_context *ctx, byte *parent_buf, 
       uint32_t rowid, uint32_t cur_level_pos, byte is_last) {
 
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
-  uint16_t last_pos = read_uint16(another_buf + 5);
-  int rec_count = read_uint16(another_buf + 3) + 1;
+  uint16_t last_pos = read_uint16(parent_buf + 5);
+  int rec_count = read_uint16(parent_buf + 3) + 1;
   byte rec_len = 4 + get_sizeof_vint32(rowid);
 
   if (last_pos == 0)
@@ -197,14 +197,14 @@ int add_rec_to_inner_tbl(struct ulog_sqlite_context *ctx, byte *another_buf,
     last_pos = 0;
   cur_level_pos++;
   if (last_pos) {
-    write_uint32(another_buf + last_pos, cur_level_pos);
-    write_vint32(another_buf + last_pos + 4, rowid);
-    write_uint16(another_buf + 3, rec_count--);
-    write_uint16(another_buf + 12 + rec_count * 2, last_pos);
-    write_uint16(another_buf + 5, last_pos);
+    write_uint32(parent_buf + last_pos, cur_level_pos);
+    write_vint32(parent_buf + last_pos + 4, rowid);
+    write_uint16(parent_buf + 3, rec_count--);
+    write_uint16(parent_buf + 12 + rec_count * 2, last_pos);
+    write_uint16(parent_buf + 5, last_pos);
   } else {
-    write_uint32(another_buf + 8, cur_level_pos);
-    write_vint32(another_buf + 12 + rec_count * 2, rowid);
+    write_uint32(parent_buf + 8, cur_level_pos);
+    write_vint32(parent_buf + 12 + rec_count * 2, rowid);
     return 1;
   }
 
@@ -279,7 +279,7 @@ int form_page1(struct ulog_sqlite_context *ctx, int32_t page_size, char *table_n
     ulog_sqlite_set_val(ctx, 4, ULS_TYPE_TEXT, table_script, strlen(table_script));
   else {
     int table_name_len = strlen(table_name);
-    int script_len = (13 + table_name_len + 2 + 5 * ctx->col_count);
+    int script_len = (13 + table_name_len + 2 + 5 * orig_col_count);
     ulog_sqlite_set_val(ctx, 4, ULS_TYPE_TEXT, buf + 110, script_len);
     byte *script_pos = buf + page_size - buf[20] - script_len;
     memcpy(script_pos, "CREATE TABLE ", 13);
@@ -368,7 +368,7 @@ int ulog_sqlite_next_row(struct ulog_sqlite_context *ctx) {
   write_uint16(ptr + 8 - 2 + (rec_count * 2), last_pos);
   ctx->flush_flag = 0xA5;
 
-  return 0;
+  return ULS_RES_OK;
 }
 
 int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx,
@@ -496,7 +496,7 @@ int ulog_sqlite_flush(struct ulog_sqlite_context *ctx) {
 // page_count = 2 and prefix = "uLogSQLite xxxx" -> logging data
 // page_count = x and prefix = "uLogSQLite xxxx" -> finalizing, x is last data page
 // page_count = x and prefix = "SQLite format 3" -> finalize complete
-int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
+int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx) {
 
   uint16_t page_size = get_pagesize(ctx->page_size_exp);
   if (ctx->flush_flag == 0xA5) {
@@ -523,27 +523,33 @@ int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf) {
   uint32_t next_level_begin_pos = next_level_cur_pos;
   uint32_t cur_level_pos = 1;
   do {
-    init_bt_tbl_inner(another_buf);
+    init_bt_tbl_inner(ctx->buf);
     while (cur_level_pos < next_level_begin_pos) {
+      byte src_buf[12];
       if ((ctx->seek_fn)(ctx, cur_level_pos * page_size))
         return ULS_RES_SEEK_ERR;
-      int32_t bytes_read = (ctx->read_fn)(ctx, ctx->buf, page_size);
-      if (bytes_read != page_size) {
+      if ((ctx->read_fn)(ctx, src_buf, 12) != 12) {
         cur_level_pos++;
         break;
       }
-      uint16_t last_pos = read_uint16(ctx->buf + 5);
+      uint16_t last_pos = read_uint16(src_buf + 5);
+      uint8_t page_type = *src_buf;
+      if ((ctx->seek_fn)(ctx, (cur_level_pos * page_size) + last_pos))
+        return ULS_RES_SEEK_ERR;
+      if ((ctx->read_fn)(ctx, src_buf, 12) != 12) {
+        cur_level_pos++;
+        break;
+      }
       int8_t vint_len;
-      uint32_t rowid = read_vint32(ctx->buf + last_pos + 
-                         (ctx->buf[0] == 13 ? 3 : 4), &vint_len);
+      uint32_t rowid = read_vint32(src_buf + (page_type == 13 ? 3 : 4), &vint_len);
       byte is_last = (cur_level_pos + 1 == next_level_begin_pos ? 1 : 0);
-      if (add_rec_to_inner_tbl(ctx, another_buf, rowid, cur_level_pos, is_last)) {
+      if (add_rec_to_inner_tbl(ctx, ctx->buf, rowid, cur_level_pos, is_last)) {
         if ((ctx->seek_fn)(ctx, next_level_cur_pos * page_size))
           return ULS_RES_SEEK_ERR;
         next_level_cur_pos++;
-        if ((ctx->write_fn)(ctx, another_buf, page_size) != page_size)
+        if ((ctx->write_fn)(ctx, ctx->buf, page_size) != page_size)
           return ULS_RES_WRITE_ERR;
-        init_bt_tbl_inner(another_buf);
+        init_bt_tbl_inner(ctx->buf);
       }
       cur_level_pos++;
     }

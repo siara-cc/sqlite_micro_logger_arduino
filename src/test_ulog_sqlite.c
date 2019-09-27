@@ -82,8 +82,7 @@ int test_multilevel(char *filename) {
     if (i < max_rows - 1)
       ulog_sqlite_next_row(&ctx);
   }
-  byte another_buf[page_size];
-  if (ulog_sqlite_finalize(&ctx, another_buf)) {
+  if (ulog_sqlite_finalize(&ctx)) {
     printf("Error during finalize\n");
     return -6;
   }
@@ -147,7 +146,7 @@ void print_usage() {
   printf("ulog_sqlite -f <db_name.db>\n");
   printf("    Finalizes DB created to be used as a SQLite database\n\n");
   printf("ulog_sqlite -r\n");
-  printf("    Runs in-built tests\n\n");
+  printf("    Runs pre-defined tests\n\n");
 }
 
 byte validate_page_size(long page_size) {
@@ -266,8 +265,7 @@ int create_db(int argc, char *argv[]) {
       }
     }
   }
-  byte another_buf[page_size];
-  if (ulog_sqlite_finalize(&ctx, another_buf)) {
+  if (ulog_sqlite_finalize(&ctx)) {
     printf("Error during finalize\n");
     return -6;
   }

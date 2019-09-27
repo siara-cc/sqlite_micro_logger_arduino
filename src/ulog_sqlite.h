@@ -42,7 +42,7 @@ int ulog_sqlite_next_row(struct ulog_sqlite_context *ctx);
 int ulog_sqlite_set_val(struct ulog_sqlite_context *ctx, int col_idx,
                           int type, const void *val, uint16_t len);
 int ulog_sqlite_flush(struct ulog_sqlite_context *ctx);
-int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx, void *another_buf);
+int ulog_sqlite_finalize(struct ulog_sqlite_context *ctx);
 int ulog_sqlite_check(struct ulog_sqlite_context *ctx);
 
 #ifdef __cplusplus
