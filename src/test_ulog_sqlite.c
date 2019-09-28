@@ -122,8 +122,10 @@ int test_basic(char *filename) {
   //uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "Suillus bovinus, the Jersey cow mushroom, is a pored mushroom in the family Suillaceae. A common fungus native to Europe and Asia, it has been introduced to North America and Australia. It was initially described as Boletus bovinus by Carl Linnaeus in 1753, and given its current binomial name by Henri François Anne de Roussel in 1806. It is an edible mushroom, though not highly regarded. The fungus grows in coniferous forests in its native range, and pine plantations elsewhere. It is sometimes parasitised by the related mushroom Gomphidius roseus. S. bovinus produces spore-bearing mushrooms, often in large numbers, each with a convex grey-yellow or ochre cap reaching up to 10 cm (4 in) in diameter, flattening with age. As in other boletes, the cap has spore tubes extending downward from the underside, rather than gills. The pore surface is yellow. The stalk, more slender than those of other Suillus boletes, lacks a ring. (Full article...)", 953);
   uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "thank", 5);
   uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, "you", 3);
-  uls_flush(&ctx);
-
+  if (uls_finalize(&ctx)) {
+    printf("Error during finalize\n");
+    return -6;
+  }
   close(fd);
 
   return 0;
@@ -140,14 +142,14 @@ void print_usage() {
   printf("test_ulog_sqlite -c <db_name.db> <page_size> <col_count> <csv_1> ... <csv_n>\n");
   printf("    Creates a Sqlite database with the given name and page size\n");
   printf("        and given records in CSV format (no comma in data)\n\n");
-  printf("test_ulog_sqlite -a <db_name.db> <csv_1> ... <csv_n>\n");
-  printf("    Appends to a Sqlite database created using -c above\n");
-  printf("        with records in CSV format\n\n");
+  //printf("test_ulog_sqlite -a <db_name.db> <csv_1> ... <csv_n>\n");
+  //printf("    Appends to a Sqlite database created using -c above\n");
+  //printf("        with records in CSV format\n\n");
   printf("test_ulog_sqlite -r\n");
   printf("    Runs pre-defined tests\n\n");
 }
 
-extern byte page_size_exp(int32_t page_size);
+extern byte get_page_size_exp(int32_t page_size);
 byte validate_page_size(int32_t page_size) {
   return get_page_size_exp(page_size);
 }
@@ -173,7 +175,6 @@ int add_col(struct uls_write_context *ctx, int col_idx, char *data, byte isInt, 
   if (isReal) {
     //float dval = atof(data);
     double dval = atof(data);
-    printf("%lf\n", dval);
     return uls_set_col_val(ctx, col_idx, ULS_TYPE_REAL, &dval, sizeof(dval));
   }
   return uls_set_col_val(ctx, col_idx, ULS_TYPE_TEXT, data, strlen(data));
