@@ -41,7 +41,7 @@ struct uls_write_context {
 int uls_write_init(struct uls_write_context *wctx);
 int uls_write_init_with_script(struct uls_write_context *wctx,
       char *table_name, char *table_script);
-int uls_write_init_for_append(struct uls_write_context *wctx);
+int uls_init_for_append(struct uls_write_context *wctx);
 int uls_create_new_row(struct uls_write_context *wctx);
 int uls_set_col_val(struct uls_write_context *wctx, int col_idx,
                           int type, const void *val, uint16_t len);

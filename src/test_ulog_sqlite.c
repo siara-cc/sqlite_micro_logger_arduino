@@ -29,6 +29,20 @@ int seek_fn(struct uls_write_context *ctx, long pos) {
   return ULS_RES_OK;
 }
 
+int32_t read_fn_rctx(struct uls_read_context *ctx, void *buf, size_t len) {
+  ssize_t ret = read(fd, buf, len);
+  if (ret == -1)
+    return ULS_RES_READ_ERR;
+  return ret;
+}
+
+int seek_fn_rctx(struct uls_read_context *ctx, long pos) {
+  off_t ret = lseek(fd, pos, SEEK_SET);
+  if (ret == -1)
+    return ULS_RES_SEEK_ERR;
+  return ULS_RES_OK;
+}
+
 int32_t write_fn(struct uls_write_context *ctx, void *buf, size_t len) {
   ssize_t ret = write(fd, buf, len);
   if (ret == -1) {
@@ -142,11 +156,14 @@ void print_usage() {
   printf("test_ulog_sqlite -c <db_name.db> <page_size> <col_count> <csv_1> ... <csv_n>\n");
   printf("    Creates a Sqlite database with the given name and page size\n");
   printf("        and given records in CSV format (no comma in data)\n\n");
-  //printf("test_ulog_sqlite -a <db_name.db> <csv_1> ... <csv_n>\n");
-  //printf("    Appends to a Sqlite database created using -c above\n");
-  //printf("        with records in CSV format\n\n");
-  printf("test_ulog_sqlite -r\n");
-  printf("    Runs pre-defined tests\n\n");
+  printf("test_ulog_sqlite -a <db_name.db> <page_size> <col_count> <csv_1> ... <csv_n>\n");
+  printf("    Appends to a Sqlite database created using -c above\n");
+  printf("        with records in CSV format (page_size and col_count have to match)\n\n");
+  printf("test_ulog_sqlite -r <db_name.db> <rowid>\n");
+  printf("    Searches db_name.db for given row_id using\n");
+  printf("        binary search and prints result\n\n");
+  printf("test_ulog_sqlite -n\n");
+  printf("    Runs pre-defined tests and creates databases (verified manually)\n\n");
 }
 
 extern byte get_page_size_exp(int32_t page_size);
@@ -180,6 +197,53 @@ int add_col(struct uls_write_context *ctx, int col_idx, char *data, byte isInt, 
   return uls_set_col_val(ctx, col_idx, ULS_TYPE_TEXT, data, strlen(data));
 }
 
+int append_records(int argc, char *argv[], struct uls_write_context *ctx) {
+  for (int i = 5; i < argc; i++) {
+    char *col_data = argv[i];
+    char *chr = col_data;
+    int col_idx = 0;
+    byte isInt = 1;
+    byte isReal = 1;
+    while (*chr != '\0') {
+      if (*chr == ',') {
+        *chr = '\0';
+        if (add_col(ctx, col_idx++, col_data, isInt, isReal)) {
+          printf("Error during add col\n");
+          return -4;
+        }
+        chr++;
+        col_data = chr;
+        isInt = 1;
+        isReal = 1;
+        continue;
+      }
+      if ((*chr < '0' || *chr > '9') && *chr != '-' && *chr != '.') {
+        isInt = 0;
+        isReal = 0;
+      } else {
+        if (*chr == '.')
+          isInt = 0;
+      }
+      chr++;
+    }
+    if (add_col(ctx, col_idx++, col_data, isInt, isReal)) {
+      printf("Error during add col\n");
+      return -4;
+    }
+    if (i < argc - 1) {
+      if (uls_create_new_row(ctx)) {
+        printf("Error during add col\n");
+        return -5;
+      }
+    }
+  }
+  if (uls_finalize(ctx)) {
+    printf("Error during finalize\n");
+    return -6;
+  }
+  return 0;
+}
+
 int create_db(int argc, char *argv[]) {
   int32_t page_size = atol(argv[3]);
   byte page_size_exp = validate_page_size(page_size);
@@ -208,49 +272,61 @@ int create_db(int argc, char *argv[]) {
     printf("Error during init\n");
     return -3;
   }
-  for (int i = 5; i < argc; i++) {
-    char *col_data = argv[i];
-    char *chr = col_data;
-    int col_idx = 0;
-    byte isInt = 1;
-    byte isReal = 1;
-    while (*chr != '\0') {
-      if (*chr == ',') {
-        *chr = '\0';
-        if (add_col(&ctx, col_idx++, col_data, isInt, isReal)) {
-          printf("Error during add col\n");
-          return -4;
-        }
-        chr++;
-        col_data = chr;
-        isInt = 1;
-        isReal = 1;
-        continue;
-      }
-      if ((*chr < '0' || *chr > '9') && *chr != '-' && *chr != '.') {
-        isInt = 0;
-        isReal = 0;
-      } else {
-        if (*chr == '.')
-          isInt = 0;
-      }
-      chr++;
-    }
-    if (add_col(&ctx, col_idx++, col_data, isInt, isReal)) {
-      printf("Error during add col\n");
-      return -4;
-    }
-    if (i < argc - 1) {
-      if (uls_create_new_row(&ctx)) {
-        printf("Error during add col\n");
-        return -5;
-      }
-    }
+  return append_records(argc, argv, &ctx);
+}
+
+int append_db(int argc, char *argv[]) {
+  int32_t page_size = atol(argv[3]);
+  byte page_size_exp = validate_page_size(page_size);
+  if (!page_size_exp) {
+    printf("Page size should be one of 512, 1024, 2048, 4096, 8192, 16384, 32768 or 65536\n");
+    return -1;
   }
-  if (uls_finalize(&ctx)) {
-    printf("Error during finalize\n");
-    return -6;
+  byte col_count = atoi(argv[4]);
+  byte buf[page_size];
+  struct uls_write_context ctx;
+  ctx.buf = buf;
+  ctx.col_count = col_count;
+  ctx.page_size_exp = page_size_exp;
+  ctx.max_pages_exp = 0;
+  ctx.read_fn = read_fn;
+  ctx.seek_fn = seek_fn;
+  ctx.flush_fn = flush_fn;
+  ctx.write_fn = write_fn;
+  fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  if (fd == -1) {
+    perror("Error");
+    return -2;
   }
+  if (uls_init_for_append(&ctx)) {
+    printf("Error during init\n");
+    return -3;
+  }
+  return append_records(argc, argv, &ctx);
+}
+
+int read_db(int argc, char *argv[]) {
+  byte initial_buf[72];
+  struct uls_read_context ctx;
+  ctx.buf = initial_buf;
+  ctx.read_fn = read_fn_rctx;
+  ctx.seek_fn = seek_fn_rctx;
+  fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  if (fd == -1) {
+    perror("Error");
+    return -2;
+  }
+  if (uls_read_init(&ctx)) {
+    printf("Error during init\n");
+    return -3;
+  }
+  byte actual_buf[1 << (ctx.page_size_exp == 1 ? 16 : ctx.page_size_exp)];
+  ctx.buf = actual_buf;
+  uint32_t rowid = atol(argv[3]);
+  if (uls_bin_srch_row_by_id(&ctx, rowid)) {
+    printf("Not Found\n");
+  } else
+    printf("Found\n");
   return 0;
 }
 
@@ -259,7 +335,13 @@ int main(int argc, char *argv[]) {
   if (argc > 4 && strcmp(argv[1], "-c") == 0) {
     create_db(argc, argv);
   } else
-  if (argc == 2 && strcmp(argv[1], "-r") == 0) {
+  if (argc > 4 && strcmp(argv[1], "-a") == 0) {
+    append_db(argc, argv);
+  } else
+  if (argc == 4 && strcmp(argv[1], "-r") == 0) {
+    read_db(argc, argv);
+  } else
+  if (argc == 2 && strcmp(argv[1], "-n") == 0) {
     test_basic("hello.db");
     test_multilevel("ml.db");
   } else
