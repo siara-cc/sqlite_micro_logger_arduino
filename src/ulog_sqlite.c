@@ -805,7 +805,7 @@ int read_last_rowid(struct uls_read_context *rctx, uint32_t pos, int32_t page_si
 
 uint32_t read_rowid_at(struct uls_read_context *rctx, uint32_t rec_pos, uint16_t *out_data_pos) {
   int8_t vint_len;
-  *out_data_pos = read_uint16(rctx->buf + 8 - 2 + rec_pos * 2);
+  *out_data_pos = read_uint16(rctx->buf + 8 + rec_pos * 2);
   return read_vint32(rctx->buf + *out_data_pos + LEN_OF_REC_LEN, &vint_len);
 }
 
