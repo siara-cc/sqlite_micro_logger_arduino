@@ -610,7 +610,7 @@ int uls_finalize(struct uls_write_context *wctx) {
   uint32_t next_level_cur_pos = wctx->cur_write_page + 1;
   uint32_t next_level_begin_pos = next_level_cur_pos;
   uint32_t cur_level_pos = 1;
-  do {
+  while (wctx->cur_write_page != 1) {
     init_bt_tbl_inner(wctx->buf);
     while (cur_level_pos < next_level_begin_pos) {
       uint32_t rowid;
@@ -634,7 +634,7 @@ int uls_finalize(struct uls_write_context *wctx) {
       cur_level_pos = next_level_begin_pos;
       next_level_begin_pos = next_level_cur_pos;
     }
-  } while (1);
+  }
 
   res = read_bytes_wctx(wctx, wctx->buf, 0, page_size);
   if (res)
@@ -691,7 +691,10 @@ int uls_init_for_append(struct uls_write_context *wctx) {
   res = get_last_rowid(wctx, wctx->cur_write_page, page_size, &wctx->cur_write_rowid);
   if (res)
     return res;
-  res = read_bytes_wctx(wctx, wctx->buf, wctx->cur_write_page, page_size);
+  res = read_bytes_wctx(wctx, wctx->buf, wctx->cur_write_page * page_size, page_size);
+  if (res)
+    return res;
+  res = uls_create_new_row(wctx);
   if (res)
     return res;
   return ULS_RES_OK;
@@ -722,12 +725,31 @@ int uls_read_init(struct uls_read_context *rctx) {
   return ULS_RES_OK;
 }
 
+int uls_cur_row_col_count(struct uls_read_context *rctx) {
+  uint16_t rec_data_pos = read_uint16(rctx->buf + 8 + rctx->cur_rec_pos * 2);
+  int8_t vint_len;
+  byte *ptr = rctx->buf + rec_data_pos + LEN_OF_REC_LEN;
+  read_vint32(ptr, &vint_len);
+  ptr += vint_len;
+  uint16_t hdr_len = read_vint16(ptr, &vint_len);
+  int col_count = 0;
+  ptr += vint_len;
+  hdr_len -= vint_len;
+  while (hdr_len > 0) {
+    read_vint32(ptr, &vint_len);
+    ptr += vint_len;
+    hdr_len -= vint_len;
+    col_count++;
+  }
+  return col_count;
+}
+
 const void *uls_read_col_val(struct uls_read_context *rctx,
      int col_idx, uint32_t *out_col_type) {
   if (rctx->cur_page == 0)
     uls_read_first_row(rctx);
   return get_col_val(rctx->buf, 
-    read_uint16(rctx->buf + 8 - 2 + rctx->cur_rec_pos * 2), 
+    read_uint16(rctx->buf + 8 + rctx->cur_rec_pos * 2), 
     col_idx, out_col_type);
 }
 
@@ -787,15 +809,15 @@ int uls_read_last_row(struct uls_read_context *rctx) {
   return ULS_RES_OK;
 }
 
-int read_last_rowid(struct uls_read_context *rctx, uint32_t pos, int32_t page_size, uint32_t *out_rowid, uint16_t *out_data_pos) {
+int read_last_rowid(struct uls_read_context *rctx, uint32_t pos, int32_t page_size, uint32_t *out_rowid, uint16_t *out_rec_pos) {
   byte src_buf[12];
   int res = read_bytes_rctx(rctx, src_buf, pos * page_size, 12);
   if (res)
     return res;
   if (*src_buf != 13)
     return ULS_RES_MALFORMED;
-  *out_data_pos = read_uint16(src_buf + 5);
-  res = read_bytes_rctx(rctx, src_buf, pos * page_size + *out_data_pos, 12);
+  *out_rec_pos = read_uint16(src_buf + 3) - 1;
+  res = read_bytes_rctx(rctx, src_buf, pos * page_size + read_uint16(src_buf + 5), 12);
   if (res)
     return res;
   int8_t vint_len;
@@ -803,10 +825,10 @@ int read_last_rowid(struct uls_read_context *rctx, uint32_t pos, int32_t page_si
   return ULS_RES_OK;
 }
 
-uint32_t read_rowid_at(struct uls_read_context *rctx, uint32_t rec_pos, uint16_t *out_data_pos) {
+uint32_t read_rowid_at(struct uls_read_context *rctx, uint32_t rec_pos) {
   int8_t vint_len;
-  *out_data_pos = read_uint16(rctx->buf + 8 + rec_pos * 2);
-  return read_vint32(rctx->buf + *out_data_pos + LEN_OF_REC_LEN, &vint_len);
+  return read_vint32(rctx->buf + read_uint16(rctx->buf + 8 + rec_pos * 2)
+           + LEN_OF_REC_LEN, &vint_len);
 }
 
 int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
@@ -814,14 +836,14 @@ int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
   if (rctx->last_leaf_page == 0)
     return ULS_RES_NOT_FINALIZED;
   uint32_t middle, first, size;
-  uint16_t rec_data_pos;
   int res;
   first = 1;
   size = rctx->last_leaf_page + 1;
   while (first < size) {
     middle = (first + size) >> 1;
     uint32_t rowid_at;
-    res = read_last_rowid(rctx, middle, page_size, &rowid_at, &rec_data_pos);
+    uint16_t rec_pos;
+    res = read_last_rowid(rctx, middle, page_size, &rowid_at, &rec_pos);
     if (res)
       return res;
     if (rowid_at < rowid)
@@ -830,7 +852,10 @@ int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
       size = middle;
     else {
       rctx->cur_page = middle;
-      rctx->cur_rec_pos = rec_data_pos;
+      rctx->cur_rec_pos = rec_pos;
+      res = read_bytes_rctx(rctx, rctx->buf, middle * page_size, page_size);
+      if (res)
+        return res;
       return ULS_RES_OK;
     }
   }
@@ -842,7 +867,7 @@ int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
   size = read_uint16(rctx->buf + 3);
   while (first < size) {
     middle = (first + size) >> 1;
-    uint32_t rowid_at = read_rowid_at(rctx, middle, &rec_data_pos);
+    uint32_t rowid_at = read_rowid_at(rctx, middle);
     if (res)
       return res;
     if (rowid_at < rowid)
@@ -851,7 +876,7 @@ int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
       size = middle;
     else {
       rctx->cur_page = found_at_page;
-      rctx->cur_rec_pos = rec_data_pos;
+      rctx->cur_rec_pos = middle;
       return ULS_RES_OK;
     }
   }

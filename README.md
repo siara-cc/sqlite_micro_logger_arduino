@@ -8,7 +8,7 @@ Lean and Mean Sqlite Data(base) Logger
 
 - Memory requirement: `page_size` + some stack
 - "Finalize" is optional 
-- Can log using Arduino UNO with 512kb page size (2kb RAM)
+- Can log using Arduino UNO (2kb RAM) with 512kb page size
 - Can do binary search on RowID or Timestamp without any index
 - Recovery possible in case of power failure
 - Rolling logs are possible (not implemented yet)

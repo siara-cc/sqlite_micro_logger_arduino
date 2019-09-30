@@ -70,6 +70,7 @@ int test_multilevel(char *filename) {
   ctx.col_count = 4;
   ctx.page_size_exp = 16;
   ctx.max_pages_exp = 0;
+  ctx.page_resv_bytes = 0;
   ctx.read_fn = read_fn;
   ctx.seek_fn = seek_fn;
   ctx.flush_fn = flush_fn;
@@ -115,6 +116,7 @@ int test_basic(char *filename) {
   ctx.col_count = 5;
   ctx.page_size_exp = 9;
   ctx.max_pages_exp = 0;
+  ctx.page_resv_bytes = 0;
   ctx.read_fn = read_fn;
   ctx.seek_fn = seek_fn;
   ctx.flush_fn = flush_fn;
@@ -258,6 +260,7 @@ int create_db(int argc, char *argv[]) {
   ctx.col_count = col_count;
   ctx.page_size_exp = page_size_exp;
   ctx.max_pages_exp = 0;
+  ctx.page_resv_bytes = 0;
   ctx.read_fn = read_fn;
   ctx.seek_fn = seek_fn;
   ctx.flush_fn = flush_fn;
@@ -289,6 +292,7 @@ int append_db(int argc, char *argv[]) {
   ctx.col_count = col_count;
   ctx.page_size_exp = page_size_exp;
   ctx.max_pages_exp = 0;
+  ctx.page_resv_bytes = 0;
   ctx.read_fn = read_fn;
   ctx.seek_fn = seek_fn;
   ctx.flush_fn = flush_fn;
@@ -303,6 +307,39 @@ int append_db(int argc, char *argv[]) {
     return -3;
   }
   return append_records(argc, argv, &ctx);
+}
+
+int16_t read_int16(const byte *ptr) {
+  return (*ptr << 8) | ptr[1];
+}
+
+int32_t read_int32(const byte *ptr) {
+  int32_t ret;
+  ret  = ((int32_t)*ptr++) << 24;
+  ret |= ((int32_t)*ptr++) << 16;
+  ret |= ((int32_t)*ptr++) << 8;
+  ret |= *ptr;
+  return ret;
+}
+
+int64_t read_int64(const byte *ptr) {
+  int64_t ret;
+  ret  = ((int64_t)*ptr++) << 56;
+  ret |= ((int64_t)*ptr++) << 48;
+  ret |= ((int64_t)*ptr++) << 40;
+  ret |= ((int64_t)*ptr++) << 32;
+  ret |= ((int64_t)*ptr++) << 24;
+  ret |= ((int64_t)*ptr++) << 16;
+  ret |= ((int64_t)*ptr++) << 8;
+  ret |= *ptr;
+  return ret;
+}
+
+double read_double(const byte *ptr) {
+  double ret;
+  int64_t ival = read_int64(ptr);
+  memcpy(&ret, &ival, sizeof(double));
+  return ret;
 }
 
 int read_db(int argc, char *argv[]) {
@@ -325,8 +362,54 @@ int read_db(int argc, char *argv[]) {
   uint32_t rowid = atol(argv[3]);
   if (uls_bin_srch_row_by_id(&ctx, rowid)) {
     printf("Not Found\n");
-  } else
-    printf("Found\n");
+  } else {
+    int col_count = uls_cur_row_col_count(&ctx);
+    for (int i = 0; i < col_count; i++) {
+      if (i)
+        putchar('|');
+      uint32_t col_type;
+      const byte *col_val = (const byte *) uls_read_col_val(&ctx, i, &col_type);
+      switch (col_type) {
+        case 0:
+          printf("null");
+          break;
+        case 1:
+          printf("%d", *((int8_t *)col_val));
+          break;
+        case 2:
+          if (1) {
+            int16_t ival = read_int16(col_val);
+            printf("%d", ival);
+          }
+          break;
+        case 4: {
+          int32_t ival = read_int32(col_val);
+          printf("%d", ival);
+          break;
+        }
+        case 6: {
+          int64_t ival = read_int64(col_val);
+          printf("%lld", ival);
+          break;
+        }
+        case 7: {
+          double dval = read_double(col_val);
+          printf("%lf", dval);
+          break;
+        }
+        default: {
+          uint32_t col_len = uls_derive_data_len(col_type);
+          for (int j = 0; j < col_len; j++) {
+            if (col_type % 2)
+              putchar(col_val[j]);
+            else
+              printf("x%2x ", col_val[j]);
+          }
+        }
+      }
+    }
+  }
+  putchar('\n');
   return 0;
 }
 

@@ -64,6 +64,7 @@ struct uls_read_context {
 
 // retrieve functions
 int uls_read_init(struct uls_read_context *rctx);
+int uls_cur_row_col_count(struct uls_read_context *rctx);
 const void *uls_read_col_val(struct uls_read_context *rctx, int col_idx, uint32_t *out_col_type);
 uint32_t uls_derive_data_len(uint32_t col_type);
 int uls_read_first_row(struct uls_read_context *rctx);

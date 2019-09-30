@@ -6,26 +6,26 @@
 //SdFat SD;
 File myFile;
 
-int32_t read_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
+int32_t read_fn(struct uls_write_context *ctx, void *buf, size_t len) {
   size_t ret = myFile.read((byte *)buf, len);
   if (ret != len)
     return ULS_RES_READ_ERR;
   return ret;
 }
 
-int seek_fn(struct ulog_sqlite_context *ctx, long pos) {
+int seek_fn(struct uls_write_context *ctx, long pos) {
   myFile.seek(pos);
   return ULS_RES_OK;
 }
 
-int32_t write_fn(struct ulog_sqlite_context *ctx, void *buf, size_t len) {
+int32_t write_fn(struct uls_write_context *ctx, void *buf, size_t len) {
   size_t ret = myFile.write((byte *)buf, len);
   if (ret != len)
     return ULS_RES_ERR;
   return ret;
 }
 
-int flush_fn(struct ulog_sqlite_context *ctx) {
+int flush_fn(struct uls_write_context *ctx) {
   myFile.flush();
   return ULS_RES_OK;
 }
@@ -112,7 +112,7 @@ void loop() {
 
   // if the file opened okay, write to it:
   if (myFile) {
-    struct ulog_sqlite_context ctx;
+    struct uls_write_context ctx;
     ctx.buf = buf;
     ctx.col_count = 6;
     ctx.page_size_exp = 9;
