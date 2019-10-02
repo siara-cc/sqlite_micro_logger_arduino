@@ -626,6 +626,7 @@ int uls_set_col_val(struct uls_write_context *wctx,
   return ULS_RES_OK;
 }
 
+// See .h file for API description
 const void *uls_get_col_val(struct uls_write_context *wctx,
         int col_idx, uint32_t *out_col_type) {
   uint16_t last_pos = read_uint16(wctx->buf + 5);
@@ -634,6 +635,7 @@ const void *uls_get_col_val(struct uls_write_context *wctx,
   return get_col_val(wctx->buf, last_pos, col_idx, out_col_type);
 }
 
+// See .h file for API description
 int uls_flush(struct uls_write_context *wctx) {
   int32_t page_size = get_pagesize(wctx->page_size_exp);
   int res = write_page(wctx, wctx->cur_write_page, page_size);
@@ -645,9 +647,7 @@ int uls_flush(struct uls_write_context *wctx) {
   return ret;
 }
 
-// page_count = 2 and prefix = "uLogSQLite xxxx" -> logging data
-// page_count = x and prefix = "uLogSQLite xxxx" -> finalizing, x is last data page
-// page_count = x and prefix = "SQLite format 3" -> finalize complete
+// See .h file for API description
 int uls_finalize(struct uls_write_context *wctx) {
 
   int32_t page_size = get_pagesize(wctx->page_size_exp);
@@ -718,6 +718,7 @@ int uls_finalize(struct uls_write_context *wctx) {
   return ULS_RES_OK;
 }
 
+// See .h file for API description
 int uls_not_finalized(struct uls_write_context *wctx) {
   int res = read_bytes_wctx(wctx, wctx->buf, 0, 72);
   if (res)
@@ -727,6 +728,7 @@ int uls_not_finalized(struct uls_write_context *wctx) {
   return ULS_RES_NOT_FINALIZED;
 }
 
+// See .h file for API description
 int uls_init_for_append(struct uls_write_context *wctx) {
   int res = read_bytes_wctx(wctx, wctx->buf, 0, 72);
   if (res)
@@ -763,6 +765,7 @@ int uls_init_for_append(struct uls_write_context *wctx) {
   return ULS_RES_OK;
 }
 
+// Reads current page
 int read_cur_page(struct uls_read_context *rctx) {
   int32_t page_size = get_pagesize(rctx->page_size_exp);
   int res = read_bytes_rctx(rctx, rctx->buf, rctx->cur_page * page_size, page_size);
@@ -773,6 +776,7 @@ int read_cur_page(struct uls_read_context *rctx) {
   return ULS_RES_OK;
 }
 
+// See .h file for API description
 int uls_read_init(struct uls_read_context *rctx) {
   int res = read_bytes_rctx(rctx, rctx->buf, 0, 72);
   if (res)
@@ -788,6 +792,7 @@ int uls_read_init(struct uls_read_context *rctx) {
   return ULS_RES_OK;
 }
 
+// See .h file for API description
 int uls_cur_row_col_count(struct uls_read_context *rctx) {
   uint16_t rec_data_pos = read_uint16(rctx->buf + 8 + rctx->cur_rec_pos * 2);
   int8_t vint_len;
@@ -807,6 +812,7 @@ int uls_cur_row_col_count(struct uls_read_context *rctx) {
   return col_count;
 }
 
+// See .h file for API description
 const void *uls_read_col_val(struct uls_read_context *rctx,
      int col_idx, uint32_t *out_col_type) {
   if (rctx->cur_page == 0)
@@ -816,6 +822,7 @@ const void *uls_read_col_val(struct uls_read_context *rctx,
     col_idx, out_col_type);
 }
 
+// See .h file for API description
 const int8_t col_data_lens[] = {0, 1, 2, 3, 4, 6, 8, 8};
 uint32_t uls_derive_data_len(uint32_t col_type_or_len) {
   if (col_type_or_len >= 12) {
@@ -828,6 +835,7 @@ uint32_t uls_derive_data_len(uint32_t col_type_or_len) {
   return 0;
 }
 
+// See .h file for API description
 int uls_read_first_row(struct uls_read_context *rctx) {
   rctx->cur_page = 1;
   if (read_cur_page(rctx))
@@ -836,6 +844,7 @@ int uls_read_first_row(struct uls_read_context *rctx) {
   return ULS_RES_OK;
 }
 
+// See .h file for API description
 int uls_read_next_row(struct uls_read_context *rctx) {
   uint16_t rec_count = read_uint16(rctx->buf + 3);
   rctx->cur_rec_pos++;
@@ -849,6 +858,7 @@ int uls_read_next_row(struct uls_read_context *rctx) {
   return ULS_RES_OK;
 }
 
+// See .h file for API description
 int uls_read_prev_row(struct uls_read_context *rctx) {
   if (rctx->cur_rec_pos == 0) {
     if (rctx->cur_page == 1)
@@ -862,6 +872,7 @@ int uls_read_prev_row(struct uls_read_context *rctx) {
   return ULS_RES_OK;
 }
 
+// See .h file for API description
 int uls_read_last_row(struct uls_read_context *rctx) {
   if (rctx->last_leaf_page == 0)
     return ULS_RES_NOT_FINALIZED;
@@ -872,6 +883,10 @@ int uls_read_last_row(struct uls_read_context *rctx) {
   return ULS_RES_OK;
 }
 
+// Returns the Row ID of the last record stored in the given leaf page
+// Reads the buffer part by part to avoid reading entire buffer into memory
+// to support low memory systems (2kb ram)
+// The underlying callback function hopefully optimizes repeated IO
 int read_last_rowid(struct uls_read_context *rctx, uint32_t pos, int32_t page_size, uint32_t *out_rowid, uint16_t *out_rec_pos) {
   byte src_buf[12];
   int res = read_bytes_rctx(rctx, src_buf, pos * page_size, 12);
@@ -888,12 +903,14 @@ int read_last_rowid(struct uls_read_context *rctx, uint32_t pos, int32_t page_si
   return ULS_RES_OK;
 }
 
+// Returns the Row ID of the record at given position
 uint32_t read_rowid_at(struct uls_read_context *rctx, uint32_t rec_pos) {
   int8_t vint_len;
   return read_vint32(rctx->buf + read_uint16(rctx->buf + 8 + rec_pos * 2)
            + LEN_OF_REC_LEN, &vint_len);
 }
 
+// See .h file for API description
 int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
   int32_t page_size = get_pagesize(rctx->page_size_exp);
   if (rctx->last_leaf_page == 0)
@@ -946,6 +963,7 @@ int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
   return ULS_RES_NOT_FOUND;
 }
 /*
+// See .h file for API description
 int uls_bin_srch_row_by_val(struct uls_read_context *rctx, byte *val, uint16_t len) {
   int32_t page_size = get_pagesize(rctx->page_size_exp);
   if (rctx->last_leaf_page == 0)
