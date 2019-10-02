@@ -11,7 +11,11 @@
 
 int fd;
 
-int32_t read_fn(struct uls_write_context *ctx, void *buf, size_t len) {
+int32_t read_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
+  if (lseek(fd, pos, SEEK_SET) == -1) {
+    ctx->err_no = errno;
+    return ULS_RES_SEEK_ERR;
+  }
   ssize_t ret = read(fd, buf, len);
   if (ret == -1) {
     ctx->err_no = errno;
@@ -20,30 +24,20 @@ int32_t read_fn(struct uls_write_context *ctx, void *buf, size_t len) {
   return ret;
 }
 
-int seek_fn(struct uls_write_context *ctx, long pos) {
-  off_t ret = lseek(fd, pos, SEEK_SET);
-  if (ret == -1) {
-    ctx->err_no = errno;
+int32_t read_fn_rctx(struct uls_read_context *ctx, void *buf, uint32_t pos, size_t len) {
+  if (lseek(fd, pos, SEEK_SET) == -1)
     return ULS_RES_SEEK_ERR;
-  }
-  return ULS_RES_OK;
-}
-
-int32_t read_fn_rctx(struct uls_read_context *ctx, void *buf, size_t len) {
   ssize_t ret = read(fd, buf, len);
   if (ret == -1)
     return ULS_RES_READ_ERR;
   return ret;
 }
 
-int seek_fn_rctx(struct uls_read_context *ctx, long pos) {
-  off_t ret = lseek(fd, pos, SEEK_SET);
-  if (ret == -1)
+int32_t write_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
+  if (lseek(fd, pos, SEEK_SET) == -1) {
+    ctx->err_no = errno;
     return ULS_RES_SEEK_ERR;
-  return ULS_RES_OK;
-}
-
-int32_t write_fn(struct uls_write_context *ctx, void *buf, size_t len) {
+  }
   ssize_t ret = write(fd, buf, len);
   if (ret == -1) {
     ctx->err_no = errno;
@@ -63,16 +57,15 @@ int flush_fn(struct uls_write_context *ctx) {
 
 int test_multilevel(char *filename) {
 
-  int32_t page_size = 65536;
+  int32_t page_size = 512;
   byte buf[page_size];
   struct uls_write_context ctx;
   ctx.buf = buf;
   ctx.col_count = 4;
-  ctx.page_size_exp = 16;
+  ctx.page_size_exp = 9;
   ctx.max_pages_exp = 0;
   ctx.page_resv_bytes = 0;
   ctx.read_fn = read_fn;
-  ctx.seek_fn = seek_fn;
   ctx.flush_fn = flush_fn;
   ctx.write_fn = write_fn;
 
@@ -118,7 +111,6 @@ int test_basic(char *filename) {
   ctx.max_pages_exp = 0;
   ctx.page_resv_bytes = 0;
   ctx.read_fn = read_fn;
-  ctx.seek_fn = seek_fn;
   ctx.flush_fn = flush_fn;
   ctx.write_fn = write_fn;
 
@@ -262,7 +254,6 @@ int create_db(int argc, char *argv[]) {
   ctx.max_pages_exp = 0;
   ctx.page_resv_bytes = 0;
   ctx.read_fn = read_fn;
-  ctx.seek_fn = seek_fn;
   ctx.flush_fn = flush_fn;
   ctx.write_fn = write_fn;
   unlink(argv[2]);
@@ -294,7 +285,6 @@ int append_db(int argc, char *argv[]) {
   ctx.max_pages_exp = 0;
   ctx.page_resv_bytes = 0;
   ctx.read_fn = read_fn;
-  ctx.seek_fn = seek_fn;
   ctx.flush_fn = flush_fn;
   ctx.write_fn = write_fn;
   fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
@@ -347,7 +337,6 @@ int read_db(int argc, char *argv[]) {
   struct uls_read_context ctx;
   ctx.buf = initial_buf;
   ctx.read_fn = read_fn_rctx;
-  ctx.seek_fn = seek_fn_rctx;
   fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
   if (fd == -1) {
     perror("Error");

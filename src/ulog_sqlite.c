@@ -3,36 +3,51 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+// Returns how many bytes the given integer will
+// occupy if stored as a variable integer
 int8_t get_sizeof_vint16(uint16_t vint) {
   return vint > 16383 ? 3 : (vint > 127 ? 2 : 1);
 }
 
+// Returns how many bytes the given integer will
+// occupy if stored as a variable integer
 int8_t get_sizeof_vint32(uint32_t vint) {
   return vint > 268435455 ? 5 : (vint > 2097151 ? 4 
            : (vint > 16383 ? 3 : (vint > 127 ? 2 : 1)));
 }
 
+// Stores the given byte in the given location
+// in big-endian sequence
 void write_uint8(byte *ptr, uint8_t input) {
   ptr[0] = input;
 }
 
+// Stores the given uint16_t in the given location
+// in big-endian sequence
 void write_uint16(byte *ptr, uint16_t input) {
   ptr[0] = input >> 8;
   ptr[1] = input & 0xFF;
 }
 
+// Stores the given uint32_t in the given location
+// in big-endian sequence
 void write_uint32(byte *ptr, uint32_t input) {
   int i = 4;
   while (i--)
     *ptr++ = (input >> (8 * i)) & 0xFF;
 }
 
+// Stores the given uint64_t in the given location
+// in big-endian sequence
 void write_uint64(byte *ptr, uint64_t input) {
   int i = 8;
   while (i--)
     *ptr++ = (input >> (8 * i)) & 0xFF;
 }
 
+// Stores the given uint16_t in the given location
+// in variable integer format
 int write_vint16(byte *ptr, uint16_t vint) {
   int len = get_sizeof_vint16(vint);
   for (int i = len - 1; i > 0; i--)
@@ -41,6 +56,8 @@ int write_vint16(byte *ptr, uint16_t vint) {
   return len;
 }
 
+// Stores the given uint32_t in the given location
+// in variable integer format
 int write_vint32(byte *ptr, uint32_t vint) {
   int len = get_sizeof_vint32(vint);
   for (int i = len - 1; i > 0; i--)
@@ -49,10 +66,14 @@ int write_vint32(byte *ptr, uint32_t vint) {
   return len;
 }
 
+// Reads and returns big-endian uint16_t
+// at a given memory location
 uint16_t read_uint16(byte *ptr) {
   return (*ptr << 8) + ptr[1];
 }
 
+// Reads and returns big-endian uint32_t
+// at a given memory location
 uint32_t read_uint32(byte *ptr) {
   uint32_t ret;
   ret = ((uint32_t)*ptr++) << 24;
@@ -62,6 +83,9 @@ uint32_t read_uint32(byte *ptr) {
   return ret;
 }
 
+// Reads and returns variable integer
+// from given location as uint16_t
+// Also returns the length of the varint
 uint16_t read_vint16(byte *ptr, int8_t *vlen) {
   uint16_t ret = 0;
   *vlen = 3; // read max 3 bytes
@@ -74,6 +98,9 @@ uint16_t read_vint16(byte *ptr, int8_t *vlen) {
   return ret;
 }
 
+// Reads and returns variable integer
+// from given location as uint32_t
+// Also returns the length of the varint
 uint32_t read_vint32(byte *ptr, int8_t *vlen) {
   uint32_t ret = 0;
   *vlen = 5; // read max 5 bytes
@@ -86,10 +113,13 @@ uint32_t read_vint32(byte *ptr, int8_t *vlen) {
   return ret;
 }
 
+// Returns actual page size from given exponent
 int32_t get_pagesize(byte page_size_exp) {
   return (int32_t) 1 << page_size_exp;
 }
 
+// Returns position of last record.
+// Creates one, if no record found.
 uint16_t acquire_last_pos(struct uls_write_context *wctx, byte *ptr) {
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0) {
@@ -99,6 +129,10 @@ uint16_t acquire_last_pos(struct uls_write_context *wctx, byte *ptr) {
   return last_pos;
 }
 
+// Attempts to locate a column using given index
+// Returns position of column in header area, position of column
+// in data area, record length and header length
+// See https://www.sqlite.org/fileformat.html#record_format
 byte *locate_column(byte *rec_ptr, int col_idx, byte **pdata_ptr, 
              uint16_t *prec_len, uint16_t *phdr_len) {
   int8_t vint_len;
@@ -121,6 +155,8 @@ byte *locate_column(byte *rec_ptr, int col_idx, byte **pdata_ptr,
   return hdr_ptr;
 }
 
+// Returns type of column based on given value and length
+// See https://www.sqlite.org/fileformat.html#record_format
 uint32_t derive_col_type_or_len(int type, const void *val, int len) {
   uint32_t col_type_or_len = 0;
   if (val != NULL) {
@@ -146,26 +182,25 @@ uint32_t derive_col_type_or_len(int type, const void *val, int len) {
   return col_type_or_len;    
 }
 
+// Initializes the buffer as a B-Tree Leaf table
 void init_bt_tbl_leaf(byte *ptr) {
-
   ptr[0] = 13; // Leaf table b-tree page
   write_uint16(ptr + 1, 0); // No freeblocks
   write_uint16(ptr + 3, 0); // No records yet
   write_uint16(ptr + 5, 0); // No records yet
   write_uint8(ptr + 7, 0); // Fragmented free bytes
-
 }
 
+// Initializes the buffer as a B-Tree Interior table
 void init_bt_tbl_inner(byte *ptr) {
-
   ptr[0] = 5; // Interior table b-tree page
   write_uint16(ptr + 1, 0); // No freeblocks
   write_uint16(ptr + 3, 0); // No records yet
   write_uint16(ptr + 5, 0); // No records yet
   write_uint8(ptr + 7, 0); // Fragmented free bytes
-
 }
 
+// Adds record to B-Tree inner table
 int add_rec_to_inner_tbl(struct uls_write_context *wctx, byte *parent_buf, 
       uint32_t rowid, uint32_t cur_level_pos, byte is_last) {
 
@@ -177,8 +212,7 @@ int add_rec_to_inner_tbl(struct uls_write_context *wctx, byte *parent_buf,
   if (last_pos == 0)
     last_pos = page_size - rec_len;
   else {
-    // 12 = header, 5 = space for last rowid
-    if (last_pos - rec_len < 12 + 5 + rec_count * 2)
+    if (last_pos - rec_len < 12 + rec_count * 2)
       last_pos = 0;
     else
       last_pos -= rec_len;
@@ -195,7 +229,6 @@ int add_rec_to_inner_tbl(struct uls_write_context *wctx, byte *parent_buf,
     write_uint16(parent_buf + 5, last_pos);
   } else {
     write_uint32(parent_buf + 8, cur_level_pos);
-    write_vint32(parent_buf + 12 + rec_count * 2, rowid);
     return 1;
   }
 
@@ -203,6 +236,8 @@ int add_rec_to_inner_tbl(struct uls_write_context *wctx, byte *parent_buf,
 
 }
 
+// Writes Record length, Row ID and Header length
+// at given location
 void write_rec_len_rowid_hdr_len(byte *ptr, uint16_t rec_len, uint32_t rowid, uint16_t hdr_len) {
   // write record len
   *ptr++ = 0x80 + (rec_len >> 14);
@@ -215,38 +250,75 @@ void write_rec_len_rowid_hdr_len(byte *ptr, uint16_t rec_len, uint32_t rowid, ui
   *ptr = hdr_len & 0x7F;
 }
 
-int write_bytes(struct uls_write_context *wctx, byte *buf, long pos, int32_t size) {
-  if ((wctx->seek_fn)(wctx, pos))
-    return ULS_RES_SEEK_ERR;
-  if ((wctx->write_fn)(wctx, buf, size) != size)
+/*
+void embed_checksums(byte *buf, int32_t page_size) {
+  // no need checksum for internal pages
+  if (*buf == 5)
+    return;
+  if (*buf == 13) {
+    uint16_t last_pos = read_uint16(buf + 5);
+    uint16_t rec_count = read_uint16(buf + 3);
+    uint8_t chk_sum = 0;
+    int i = 0;
+    do {
+      chk_sum += buf[i];
+    } while (i++ < 7);
+    i = last_pos;
+    do {
+      page_chk += buf[i];
+    } while (i++ < (7 + rec_count * 2));
+    do {
+      page_chk += buf[i];
+    } while (i++ < page_size);
+  } else { // Assume first page
+    int i = 0;
+    uint8_t page_chk = 0;
+    do {
+      if (i != 69)
+        page_chk += buf[i];
+    } while (++i < page_size);
+    buf[69] = page_chk;
+  }
+}
+*/
+
+// Writes a page to disk using the given callback function
+int write_page(struct uls_write_context *wctx, uint32_t page_no, int32_t page_size) {
+  if ((wctx->write_fn)(wctx, wctx->buf, page_no * page_size, page_size) != page_size)
     return ULS_RES_WRITE_ERR;
   return ULS_RES_OK;
 }
 
+// Reads specified number of bytes from disk using the given callback function
+// for Write context
 int read_bytes_wctx(struct uls_write_context *wctx, byte *buf, long pos, int32_t size) {
-  if ((wctx->seek_fn)(wctx, pos))
-    return ULS_RES_SEEK_ERR;
-  if ((wctx->read_fn)(wctx, buf, size) != size)
+  if ((wctx->read_fn)(wctx, buf, pos, size) != size)
     return ULS_RES_READ_ERR;
   return ULS_RES_OK;
 }
 
+// Reads specified number of bytes from disk using the given callback function
+// for Read context
 int read_bytes_rctx(struct uls_read_context *rctx, byte *buf, long pos, int32_t size) {
-  if ((rctx->seek_fn)(rctx, pos))
-    return ULS_RES_SEEK_ERR;
-  if ((rctx->read_fn)(rctx, buf, size) != size)
+  if ((rctx->read_fn)(rctx, buf, pos, size) != size)
     return ULS_RES_READ_ERR;
   return ULS_RES_OK;
 }
 
 const char sqlite_sig[] = "SQLite format 3";
 const char uls_sig[]    = "SQLite3 uLogger";
-
 char default_table_name[] = "t1";
-int form_page1(struct uls_write_context *wctx, int32_t page_size, char *table_name, char *table_script) {
+
+// Writes data into buffer to form first page of Sqlite db
+int form_page1(struct uls_write_context *wctx, char *table_name, char *table_script) {
+
+  if (wctx->page_size_exp < 9 || wctx->page_size_exp > 16)
+    return ULS_RES_INV_PAGE_SZ;
+  byte *buf = (byte *) wctx->buf;
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
+  wctx->cur_write_rowid = 0;
 
   // 100 byte header - refer https://www.sqlite.org/fileformat.html
-  byte *buf = (byte *) wctx->buf;
   memcpy(buf, uls_sig, 16);
   //memcpy(buf, "SQLite format 3\0", 16);
   write_uint16(buf + 16, page_size == 65536 ? 1 : (uint16_t) page_size);
@@ -324,7 +396,7 @@ int form_page1(struct uls_write_context *wctx, int32_t page_size, char *table_na
       *script_pos++ = (i == orig_col_count ? ')' : ',');
     }
   }
-  int res = write_bytes(wctx, wctx->buf, 0, page_size);
+  int res = write_page(wctx, 0, page_size);
   if (res)
     return res;
   wctx->col_count = orig_col_count;
@@ -337,16 +409,10 @@ int form_page1(struct uls_write_context *wctx, int32_t page_size, char *table_na
 
 }
 
-int create_page1(struct uls_write_context *wctx, 
-      char *table_name, char *table_script) {
-  if (wctx->page_size_exp < 9 || wctx->page_size_exp > 16)
-    return ULS_RES_INV_PAGE_SZ;
-  byte *buf = (byte *) wctx->buf;
-  int32_t page_size = get_pagesize(wctx->page_size_exp);
-  wctx->cur_write_rowid = 0;
-  return form_page1(wctx, page_size, table_name, table_script);
-}
-
+// Returns the Row ID of the last record stored in the given buffer
+// Reads the buffer part by part to avoid reading entire buffer into memory
+// to support low memory systems (2kb ram)
+// The underlying callback function hopefully optimizes repeated IO
 uint32_t get_last_rowid(struct uls_write_context *wctx, uint32_t pos, int32_t page_size, uint32_t *out_rowid) {
   byte src_buf[12];
   int res = read_bytes_wctx(wctx, src_buf, pos * page_size, 12);
@@ -362,6 +428,9 @@ uint32_t get_last_rowid(struct uls_write_context *wctx, uint32_t pos, int32_t pa
   return ULS_RES_OK;
 }
 
+// Returns pointer to data of given column index
+// Also returns type of column according to record format
+// See https://www.sqlite.org/fileformat.html#record_format
 const void *get_col_val(byte *buf, uint16_t rec_data_pos, int col_idx, uint32_t *out_col_type) {
   byte *data_ptr;
   uint16_t rec_len;
@@ -374,6 +443,7 @@ const void *get_col_val(byte *buf, uint16_t rec_data_pos, int col_idx, uint32_t 
   return data_ptr;
 }
 
+// Checks possible signatures that a file can have
 int check_signature(byte *buf) {
   if (memcmp(buf, uls_sig, 16) && memcmp(buf, sqlite_sig, 16))
     return ULS_RES_INVALID_SIG;
@@ -382,39 +452,31 @@ int check_signature(byte *buf) {
   return ULS_RES_OK;
 }
 
+// Returns exponent for given page size
 byte get_page_size_exp(int32_t page_size) {
-  switch (page_size) {
-    case 1:
-      return 16;
-    case 512:
-      return 9;
-    case 1024:
-      return 10;
-    case 2048:
-      return 11;
-    case 4096:
-      return 12;
-    case 8192:
-      return 13;
-    case 16384:
-      return 14;
-    case 32768:
-      return 15;
-  }
-  return 0;
+  if (page_size == 1)
+   return 16;
+  byte exp = 9;
+  while (page_size >> exp)
+    exp++;
+  return exp - 1;
 }
 
+// See .h file for API description
 int uls_write_init_with_script(struct uls_write_context *wctx, 
       char *table_name, char *table_script) {
-  return create_page1(wctx, table_name, table_script);
+  return form_page1(wctx, table_name, table_script);
 }
 
+// See .h file for API description
 int uls_write_init(struct uls_write_context *wctx) {
   return uls_write_init_with_script(wctx, 0, 0);
 }
 
 #define LEN_OF_REC_LEN 3
 #define LEN_OF_HDR_LEN 2
+
+// See .h file for API description
 int uls_create_new_row(struct uls_write_context *wctx) {
 
   wctx->cur_write_rowid++;
@@ -431,7 +493,7 @@ int uls_create_new_row(struct uls_write_context *wctx) {
     last_pos -= new_rec_len;
     last_pos -= len_of_rec_len_rowid;
     if (last_pos < (ptr - wctx->buf) + 9 + rec_count * 2) {
-      int res = write_bytes(wctx, wctx->buf, wctx->cur_write_page * page_size, page_size);
+      int res = write_page(wctx, wctx->cur_write_page, page_size);
       if (res)
         return res;
       wctx->cur_write_page++;
@@ -452,6 +514,7 @@ int uls_create_new_row(struct uls_write_context *wctx) {
   return ULS_RES_OK;
 }
 
+// See .h file for API description
 int uls_set_col_val(struct uls_write_context *wctx,
               int col_idx, int type, const void *val, uint16_t len) {
 
@@ -477,7 +540,7 @@ int uls_set_col_val(struct uls_write_context *wctx,
     uint16_t prev_last_pos = read_uint16(ptr + 8 + (rec_count - 2) * 2);
     write_uint16(ptr + 3, rec_count - 1);
     write_uint16(ptr + 5, prev_last_pos);
-    int res = write_bytes(wctx, wctx->buf, wctx->cur_write_page * page_size, page_size);
+    int res = write_page(wctx, wctx->cur_write_page, page_size);
     if (res)
       return res;
     wctx->cur_write_page++;
@@ -573,7 +636,7 @@ const void *uls_get_col_val(struct uls_write_context *wctx,
 
 int uls_flush(struct uls_write_context *wctx) {
   int32_t page_size = get_pagesize(wctx->page_size_exp);
-  int res = write_bytes(wctx, wctx->buf, wctx->cur_write_page * page_size, page_size);
+  int res = write_page(wctx, wctx->cur_write_page, page_size);
   if (res)
     return res;
   int ret = wctx->flush_fn(wctx);
@@ -602,7 +665,7 @@ int uls_finalize(struct uls_write_context *wctx) {
   // There was a flush just now, so update the last page in first page
   if (wctx->flush_flag == 0xA5) {
     write_uint32(wctx->buf + 60, wctx->cur_write_page);
-    res = write_bytes(wctx, wctx->buf, 0, page_size);
+    res = write_page(wctx, 0, page_size);
     if (res)
       return res;
   }
@@ -620,7 +683,7 @@ int uls_finalize(struct uls_write_context *wctx) {
       }
       byte is_last = (cur_level_pos + 1 == next_level_begin_pos ? 1 : 0);
       if (add_rec_to_inner_tbl(wctx, wctx->buf, rowid, cur_level_pos, is_last)) {
-        res = write_bytes(wctx, wctx->buf, next_level_cur_pos * page_size, page_size);
+        res = write_page(wctx, next_level_cur_pos, page_size);
         if (res)
           return res;
         next_level_cur_pos++;
@@ -648,7 +711,7 @@ int uls_finalize(struct uls_write_context *wctx) {
   write_uint32(data_ptr, next_level_cur_pos); // update root_page
   write_uint32(wctx->buf + 28, next_level_cur_pos); // update page_count
   memcpy(wctx->buf, sqlite_sig, 16);
-  res = write_bytes(wctx, wctx->buf, 0, page_size);
+  res = write_page(wctx, 0, page_size);
   if (res)
     return res;
 
@@ -685,7 +748,7 @@ int uls_init_for_append(struct uls_write_context *wctx) {
     return ULS_RES_NOT_FINALIZED;
   memcpy(wctx->buf, uls_sig, 16);
   write_uint32(wctx->buf + 60, 0);
-  res = write_bytes(wctx, wctx->buf, 0, page_size);
+  res = write_page(wctx, 0, page_size);
   if (res)
     return res;
   res = get_last_rowid(wctx, wctx->cur_write_page, page_size, &wctx->cur_write_rowid);
@@ -882,7 +945,56 @@ int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
   }
   return ULS_RES_NOT_FOUND;
 }
-
+/*
 int uls_bin_srch_row_by_val(struct uls_read_context *rctx, byte *val, uint16_t len) {
-  return ULS_RES_OK;
+  int32_t page_size = get_pagesize(rctx->page_size_exp);
+  if (rctx->last_leaf_page == 0)
+    return ULS_RES_NOT_FINALIZED;
+  uint32_t middle, first, size;
+  int res;
+  first = 1;
+  size = rctx->last_leaf_page + 1;
+  while (first < size) {
+    middle = (first + size) >> 1;
+    uint32_t rowid_at;
+    uint16_t rec_pos;
+    res = read_last_rowid(rctx, middle, page_size, &rowid_at, &rec_pos);
+    if (res)
+      return res;
+    if (rowid_at < rowid)
+      first = middle + 1;
+    else if (rowid_at > rowid)
+      size = middle;
+    else {
+      rctx->cur_page = middle;
+      rctx->cur_rec_pos = rec_pos;
+      res = read_bytes_rctx(rctx, rctx->buf, middle * page_size, page_size);
+      if (res)
+        return res;
+      return ULS_RES_OK;
+    }
+  }
+  uint32_t found_at_page = size;
+  res = read_bytes_rctx(rctx, rctx->buf, size * page_size, page_size);
+  if (res)
+    return res;
+  first = 0;
+  size = read_uint16(rctx->buf + 3);
+  while (first < size) {
+    middle = (first + size) >> 1;
+    uint32_t rowid_at = read_rowid_at(rctx, middle);
+    if (res)
+      return res;
+    if (rowid_at < rowid)
+      first = middle + 1;
+    else if (rowid_at > rowid)
+      size = middle;
+    else {
+      rctx->cur_page = found_at_page;
+      rctx->cur_rec_pos = middle;
+      return ULS_RES_OK;
+    }
+  }
+  return ULS_RES_NOT_FOUND;
 }
+*/

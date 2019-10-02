@@ -15,8 +15,16 @@ Lean and Mean Sqlite Data(base) Logger
 - Can use any media using any IO library/API or even network filesystem
 - DMA writes possible
 
+# Ensuring integrity
+
+During finalize:
+- If Sqlite format 3 and checksum matches, then all ok
+- If header checksum does not match, re-build header from leaf pages
+- If leaf page checksum does not match, discard it (optional?)
+
 # Limitations
 
 - Only one table per Sqlite database
 - Length of table script limited to (`page size` - 100) bytes
 - Index creation and lookup not possible (as of now)
+
