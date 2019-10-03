@@ -4,6 +4,9 @@
 #include <string.h>
 #include <stdio.h>
 
+#define LEN_OF_REC_LEN 3
+#define LEN_OF_HDR_LEN 2
+
 // Returns how many bytes the given integer will
 // occupy if stored as a variable integer
 int8_t get_sizeof_vint16(uint16_t vint) {
@@ -12,7 +15,7 @@ int8_t get_sizeof_vint16(uint16_t vint) {
 
 // Returns how many bytes the given integer will
 // occupy if stored as a variable integer
-int8_t get_sizeof_vint32(uint32_t vint) {
+int8_t get_vlen_of_uint32(uint32_t vint) {
   return vint > 268435455 ? 5 : (vint > 2097151 ? 4 
            : (vint > 16383 ? 3 : (vint > 127 ? 2 : 1)));
 }
@@ -59,7 +62,7 @@ int write_vint16(byte *ptr, uint16_t vint) {
 // Stores the given uint32_t in the given location
 // in variable integer format
 int write_vint32(byte *ptr, uint32_t vint) {
-  int len = get_sizeof_vint32(vint);
+  int len = get_vlen_of_uint32(vint);
   for (int i = len - 1; i > 0; i--)
     *ptr++ = 0x80 + ((vint >> (7 * i)) & 0x7F);
   *ptr = vint & 0x7F;
@@ -207,7 +210,7 @@ int add_rec_to_inner_tbl(struct uls_write_context *wctx, byte *parent_buf,
   int32_t page_size = get_pagesize(wctx->page_size_exp);
   uint16_t last_pos = read_uint16(parent_buf + 5);
   int rec_count = read_uint16(parent_buf + 3) + 1;
-  byte rec_len = 4 + get_sizeof_vint32(rowid);
+  byte rec_len = 4 + get_vlen_of_uint32(rowid);
 
   if (last_pos == 0)
     last_pos = page_size - rec_len;
@@ -250,26 +253,59 @@ void write_rec_len_rowid_hdr_len(byte *ptr, uint16_t rec_len, uint32_t rowid, ui
   *ptr = hdr_len & 0x7F;
 }
 
-/*
-void embed_checksums(byte *buf, int32_t page_size) {
-  // no need checksum for internal pages
-  if (*buf == 5)
-    return;
+uint16_t get_last_pos_and_count(byte *buf, uint16_t *rec_count) {
+  uint16_t last_pos = read_uint16(buf + 5);
+  *rec_count = read_uint16(buf + 3);
+  if (last_pos < (*buf == 13 ? 8 : 12) + *rec_count * 2)
+    return 0;
+  return last_pos;
+}
+
+// Checks or calculates 3 checksums:
+// 1. Header checksum, which is for page header and last rowid
+// 2. Checksum of first record
+// 3. Checksum of entire page
+// Checksum is simply a 8 bit sum of byte values, ignoring overflows
+// check_or_calc == 0 means check else calc
+int check_sums(byte *buf, int32_t page_size, int check_or_calc) {
+  if (*buf == 5) // no need checksum for internal pages
+    return ULS_RES_OK;
   if (*buf == 13) {
-    uint16_t last_pos = read_uint16(buf + 5);
-    uint16_t rec_count = read_uint16(buf + 3);
+    int8_t vlen;
     uint8_t chk_sum = 0;
-    int i = 0;
-    do {
+    uint16_t i = 0; // Header checksum
+    uint16_t end = 7;
+    while (i++ < end)
       chk_sum += buf[i];
-    } while (i++ < 7);
+    uint16_t last_pos = read_uint16(buf + 5);
     i = last_pos;
-    do {
-      page_chk += buf[i];
-    } while (i++ < (7 + rec_count * 2));
-    do {
-      page_chk += buf[i];
-    } while (i++ < page_size);
+    read_vint32(buf + end, &vlen);
+    end = i + LEN_OF_REC_LEN;
+    end += vlen;
+    while (i++ < end)
+      chk_sum += buf[i];
+    if (check_or_calc)
+      buf[last_pos - 1] = chk_sum;
+    i = end + 1; // First record checksum
+    end = end + read_vint16(buf + end - vlen - LEN_OF_REC_LEN, &vlen);
+    while (i++ < end)
+      chk_sum += buf[i];
+    if (check_or_calc)
+      buf[last_pos - 2] = chk_sum;
+    i = end + 1; // Page checksum
+    end = page_size;
+    while (i++ < end)
+      chk_sum += buf[i];
+    i = 8; // Page checksum (include record index)
+    end = read_uint16(buf + 3) * 2;
+    while (i++ < end)
+      chk_sum += buf[i];
+    if (check_or_calc)
+      buf[last_pos - 3] = chk_sum;
+    else {
+      if (buf[last_pos - 3] != chk_sum)
+        return ULS_RES_ERR;
+    }
   } else { // Assume first page
     int i = 0;
     uint8_t page_chk = 0;
@@ -277,10 +313,15 @@ void embed_checksums(byte *buf, int32_t page_size) {
       if (i != 69)
         page_chk += buf[i];
     } while (++i < page_size);
-    buf[69] = page_chk;
+    if (check_or_calc)
+      buf[69] = page_chk;
+    else {
+      if (buf[69] != page_chk)
+        return ULS_RES_ERR;
+    }
   }
+  return ULS_RES_OK;
 }
-*/
 
 // Writes a page to disk using the given callback function
 int write_page(struct uls_write_context *wctx, uint32_t page_no, int32_t page_size) {
@@ -473,9 +514,6 @@ int uls_write_init(struct uls_write_context *wctx) {
   return uls_write_init_with_script(wctx, 0, 0);
 }
 
-#define LEN_OF_REC_LEN 3
-#define LEN_OF_HDR_LEN 2
-
 // See .h file for API description
 int uls_create_new_row(struct uls_write_context *wctx) {
 
@@ -483,7 +521,7 @@ int uls_create_new_row(struct uls_write_context *wctx) {
   byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
   int rec_count = read_uint16(ptr + 3) + 1;
   int32_t page_size = get_pagesize(wctx->page_size_exp);
-  uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_sizeof_vint32(wctx->cur_write_rowid);
+  uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_vlen_of_uint32(wctx->cur_write_rowid);
   uint16_t new_rec_len = wctx->col_count;
   new_rec_len += LEN_OF_HDR_LEN;
   uint16_t last_pos = read_uint16(ptr + 5);
@@ -606,7 +644,7 @@ int uls_set_col_val(struct uls_write_context *wctx,
 
   // make (or reduce) space and copy len
   uint32_t new_type_or_len = derive_col_type_or_len(type, val, new_len);
-  int8_t new_len_of_len = get_sizeof_vint32(new_type_or_len);
+  int8_t new_len_of_len = get_vlen_of_uint32(new_type_or_len);
   int8_t hdr_diff = new_len_of_len -  cur_len_of_len;
   diff += hdr_diff;
   if (hdr_diff) {
@@ -789,6 +827,7 @@ int uls_read_init(struct uls_read_context *rctx) {
     return ULS_RES_INVALID_SIG;
   rctx->last_leaf_page = read_uint32(rctx->buf + 60);
   rctx->cur_page = 0;
+  rctx->root_page = 0; // to be read when needed
   return ULS_RES_OK;
 }
 
@@ -906,62 +945,70 @@ int read_last_rowid(struct uls_read_context *rctx, uint32_t pos, int32_t page_si
 // Returns the Row ID of the record at given position
 uint32_t read_rowid_at(struct uls_read_context *rctx, uint32_t rec_pos) {
   int8_t vint_len;
-  return read_vint32(rctx->buf + read_uint16(rctx->buf + 8 + rec_pos * 2)
-           + LEN_OF_REC_LEN, &vint_len);
+  return read_vint32(rctx->buf 
+    + read_uint16(rctx->buf + (*rctx->buf == 13 ? 8 : 12) + rec_pos * 2)
+    + (*rctx->buf == 13 ? LEN_OF_REC_LEN : 4), &vint_len);
+}
+
+uint32_t read_root_page(struct uls_read_context *rctx, int32_t page_size) {
+  if (rctx->root_page)
+    return rctx->root_page;
+  int res = read_bytes_rctx(rctx, rctx->buf, 0, page_size);
+  if (res)
+    return res;
+  byte *data_ptr;
+  uint16_t rec_len;
+  uint16_t hdr_len;
+  if (!locate_column(rctx->buf + read_uint16(rctx->buf + 105), 3,
+         &data_ptr, &rec_len, &hdr_len))
+    return 0;
+  return read_uint32(data_ptr);
 }
 
 // See .h file for API description
-int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
-  int32_t page_size = get_pagesize(rctx->page_size_exp);
+int uls_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
   if (rctx->last_leaf_page == 0)
     return ULS_RES_NOT_FINALIZED;
-  uint32_t middle, first, size;
-  int res;
-  first = 1;
-  size = rctx->last_leaf_page + 1;
-  while (first < size) {
-    middle = (first + size) >> 1;
-    uint32_t rowid_at;
-    uint16_t rec_pos;
-    res = read_last_rowid(rctx, middle, page_size, &rowid_at, &rec_pos);
+  int32_t page_size = get_pagesize(rctx->page_size_exp);
+  uint32_t srch_page = read_root_page(rctx, page_size);
+  if (!srch_page)
+    return ULS_RES_NOT_FINALIZED;
+  do {
+    srch_page--;
+    int res = read_bytes_rctx(rctx, rctx->buf, srch_page * page_size, page_size);
     if (res)
       return res;
-    if (rowid_at < rowid)
-      first = middle + 1;
-    else if (rowid_at > rowid)
-      size = middle;
-    else {
-      rctx->cur_page = middle;
-      rctx->cur_rec_pos = rec_pos;
-      res = read_bytes_rctx(rctx, rctx->buf, middle * page_size, page_size);
-      if (res)
-        return res;
-      return ULS_RES_OK;
+    uint32_t middle, first, size;
+    first = 0;
+    size = read_uint16(rctx->buf + 3);
+    while (first < size) {
+      middle = (first + size) >> 1;
+      uint32_t rowid_at = read_rowid_at(rctx, middle);
+      if (rowid_at < rowid)
+        first = middle + 1;
+      else if (rowid_at > rowid)
+        size = middle;
+      else {
+        if (*rctx->buf == 5) {
+          size = middle;
+          break;
+        } else {
+          rctx->cur_page = srch_page;
+          rctx->cur_rec_pos = middle;
+          return ULS_RES_OK;
+        }
+      }
     }
-  }
-  uint32_t found_at_page = size;
-  res = read_bytes_rctx(rctx, rctx->buf, size * page_size, page_size);
-  if (res)
-    return res;
-  first = 0;
-  size = read_uint16(rctx->buf + 3);
-  while (first < size) {
-    middle = (first + size) >> 1;
-    uint32_t rowid_at = read_rowid_at(rctx, middle);
-    if (res)
-      return res;
-    if (rowid_at < rowid)
-      first = middle + 1;
-    else if (rowid_at > rowid)
-      size = middle;
-    else {
-      rctx->cur_page = found_at_page;
-      rctx->cur_rec_pos = middle;
-      return ULS_RES_OK;
+    if (*rctx->buf == 5) {
+      if (first == read_uint16(rctx->buf + 3))
+        srch_page = read_uint32(rctx->buf + 8);
+      else
+        srch_page = read_uint32(rctx->buf + read_uint16(rctx->buf + 12 + size * 2));
     }
-  }
+  } while (*rctx->buf == 5);
   return ULS_RES_NOT_FOUND;
 }
+
 /*
 // See .h file for API description
 int uls_bin_srch_row_by_val(struct uls_read_context *rctx, byte *val, uint16_t len) {

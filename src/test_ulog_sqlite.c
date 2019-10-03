@@ -349,7 +349,7 @@ int read_db(int argc, char *argv[]) {
   byte actual_buf[1 << (ctx.page_size_exp == 1 ? 16 : ctx.page_size_exp)];
   ctx.buf = actual_buf;
   uint32_t rowid = atol(argv[3]);
-  if (uls_bin_srch_row_by_id(&ctx, rowid)) {
+  if (uls_srch_row_by_id(&ctx, rowid)) {
     printf("Not Found\n");
   } else {
     int col_count = uls_cur_row_col_count(&ctx);

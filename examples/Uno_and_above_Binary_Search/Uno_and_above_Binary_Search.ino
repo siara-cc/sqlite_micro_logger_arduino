@@ -1,9 +1,7 @@
 #include "ulog_sqlite.h"
 #include <SPI.h>
 #include <SD.h>
-//#include <SdFat.h>
 
-//SdFat SD;
 File myFile;
 
 int32_t read_fn(struct uls_write_context *ctx, void *buf, size_t len) {

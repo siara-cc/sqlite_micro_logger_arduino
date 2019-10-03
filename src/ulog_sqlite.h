@@ -24,7 +24,7 @@ enum {ULS_RES_SEEK_ERR = -6, ULS_RES_READ_ERR = -7, ULS_RES_INVALID_SIG = -8,
 // Write context to be passed to create / append
 // a database.  The running values need not be supplied
 struct uls_write_context {
-  byte *buf;          // working buffer
+  byte *buf;          // working buffer of size page_size
   byte col_count;     // Number of columns (whether fits into page is not checked extensively)
   byte page_size_exp; // 9=512, 10=1024 and so on upto 16=65536
   byte max_pages_exp; // Maximum data pages (as exponent of 2)
@@ -96,6 +96,7 @@ struct uls_read_context {
   int32_t (*read_fn)(struct uls_read_context *ctx, void *buf, uint32_t pos, size_t len);
   // following are running values used internally
   uint32_t last_leaf_page;
+  uint32_t root_page;
   uint32_t cur_page;
   uint16_t cur_rec_pos;
   byte page_size_exp;
@@ -138,7 +139,7 @@ int uls_read_last_row(struct uls_read_context *rctx);
 // Performs binary search on the inserted records
 // using the given Row ID and positions at the record found
 // Does not change position if record not found
-int uls_bin_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid);
+int uls_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid);
 
 // Performs binary search on the inserted records
 // using the given Value and positions at the record found
