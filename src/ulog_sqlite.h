@@ -145,7 +145,7 @@ int uls_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid);
 // Performs binary search on the inserted records
 // using the given Value and positions at the record found
 // Does not change position if record not found
-int uls_bin_srch_row_by_val(struct uls_read_context *rctx,
+int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int col_idx,
       int val_type, void *val, uint16_t len, byte is_rowid);
 
 #ifdef __cplusplus

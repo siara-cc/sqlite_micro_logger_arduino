@@ -91,13 +91,14 @@ uint32_t read_uint32(byte *ptr) {
 // Also returns the length of the varint
 uint16_t read_vint16(byte *ptr, int8_t *vlen) {
   uint16_t ret = 0;
-  *vlen = 3; // read max 3 bytes
+  int8_t len = 3; // read max 3 bytes
   do {
     ret <<= 7;
     ret += *ptr & 0x7F;
-    (*vlen)--;
-  } while ((*ptr++ & 0x80) == 0x80 && *vlen);
-  *vlen = 3 - *vlen;
+    len--;
+  } while ((*ptr++ & 0x80) == 0x80 && len);
+  if (vlen)
+    *vlen = 3 - len;
   return ret;
 }
 
@@ -106,14 +107,31 @@ uint16_t read_vint16(byte *ptr, int8_t *vlen) {
 // Also returns the length of the varint
 uint32_t read_vint32(byte *ptr, int8_t *vlen) {
   uint32_t ret = 0;
-  *vlen = 5; // read max 5 bytes
+  int8_t len = 5; // read max 5 bytes
   do {
     ret <<= 7;
     ret += *ptr & 0x7F;
-    (*vlen)--;
-  } while ((*ptr++ & 0x80) == 0x80 && *vlen);
-  *vlen = 5 - *vlen;
+    len--;
+  } while ((*ptr++ & 0x80) == 0x80 && len);
+  if (vlen)
+    *vlen = 5 - len;
   return ret;
+}
+
+// Converts float to Sqlite's Big-endian double
+uint64_t float_to_double(const void *val) {
+  uint32_t bytes = *((uint32_t *) val);
+  uint8_t exp8 = (bytes >> 23) & 0xFF;
+  uint16_t exp11 = exp8;
+  if (exp11 != 0) {
+    if (exp11 < 127)
+      exp11 = 1023 - (127 - exp11);
+    else
+      exp11 = 1023 + (exp11 - 127);
+  }
+  return ((uint64_t)(bytes >> 31) << 63) 
+      | ((uint64_t)exp11 << 52)
+      | ((uint64_t)(bytes & 0x7FFFFF) << (52-23) );
 }
 
 // Returns actual page size from given exponent
@@ -315,9 +333,9 @@ int check_sums(byte *buf, int32_t page_size, int check_or_calc) {
     while (i < page_size)
       chk_sum += buf[i++];
     if (check_or_calc)
-      buf[69] = page_chk;
+      buf[69] = chk_sum;
     else {
-      if (buf[69] != page_chk)
+      if (buf[69] != chk_sum)
         return ULS_RES_ERR;
     }
   }
@@ -916,7 +934,9 @@ int uls_read_last_row(struct uls_read_context *rctx) {
 // Reads the buffer part by part to avoid reading entire buffer into memory
 // to support low memory systems (2kb ram)
 // The underlying callback function hopefully optimizes repeated IO
-int read_last_rowid(struct uls_read_context *rctx, uint32_t pos, int32_t page_size, uint32_t *out_rowid, uint16_t *out_rec_pos) {
+int read_last_val(struct uls_read_context *rctx, uint32_t pos,
+      int32_t page_size, int col_idx, byte **pval_at, 
+      uint32_t *out_col_type, uint16_t *out_rec_pos, byte is_rowid) {
   byte src_buf[12];
   int res = read_bytes_rctx(rctx, src_buf, pos * page_size, 12);
   if (res)
@@ -924,12 +944,48 @@ int read_last_rowid(struct uls_read_context *rctx, uint32_t pos, int32_t page_si
   if (*src_buf != 13)
     return ULS_RES_MALFORMED;
   *out_rec_pos = read_uint16(src_buf + 3) - 1;
-  res = read_bytes_rctx(rctx, src_buf, pos * page_size + read_uint16(src_buf + 5), 12);
+  uint16_t last_pos = read_uint16(src_buf + 5);
+  res = read_bytes_rctx(rctx, src_buf, pos * page_size + last_pos, 12);
   if (res)
     return res;
   int8_t vint_len;
-  *out_rowid = read_vint32(src_buf + 3, &vint_len);
+  uint32_t row_id = read_vint32(src_buf + 3, &vint_len);
+  if (is_rowid)
+    *out_col_type = row_id;
+  else {
+    uint16_t rec_len = read_vint16(src_buf, NULL) + vint_len + LEN_OF_REC_LEN;
+    byte rec_buf[rec_len];
+    res = read_bytes_rctx(rctx, rec_buf, pos * page_size + last_pos, rec_len);
+    if (res)
+      return res;
+    uint16_t hdr_len;
+    byte *hdr_ptr = locate_column(rec_buf, col_idx, pval_at, &rec_len, &hdr_len);
+    if (!hdr_ptr)
+      return ULS_RES_NOT_FOUND;
+    *out_col_type = read_vint32(hdr_ptr, &vint_len);
+  }
   return ULS_RES_OK;
+}
+
+byte *read_val_at(struct uls_read_context *rctx, uint32_t pos, int col_idx,
+      uint32_t *out_col_type, byte is_rowid) {
+  int8_t vint_len;
+  uint16_t rec_pos = read_uint16(rctx->buf + 8 + pos * 2);
+  uint32_t row_id = read_vint32(rctx->buf + rec_pos + LEN_OF_REC_LEN, &vint_len);
+  if (is_rowid)
+    *out_col_type = row_id;
+  else {
+    uint16_t hdr_len;
+    uint16_t rec_len;
+    byte *data_ptr;
+    byte *hdr_ptr;
+    hdr_ptr = locate_column(rctx->buf, col_idx, &data_ptr, &rec_len, &hdr_len);
+    if (!hdr_ptr)
+      return NULL;
+    *out_col_type = read_vint32(hdr_ptr, &vint_len);
+    return data_ptr;
+  }
+  return NULL;
 }
 
 // Returns the Row ID of the record at given position
@@ -999,22 +1055,6 @@ int uls_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
   return ULS_RES_NOT_FOUND;
 }
 
-// Converts float to Sqlite's Big-endian double
-uint64_t float_to_double(const void *val) {
-  uint32_t bytes = *((uint32_t *) val);
-  uint8_t exp8 = (bytes >> 23) & 0xFF;
-  uint16_t exp11 = exp8;
-  if (exp11 != 0) {
-    if (exp11 < 127)
-      exp11 = 1023 - (127 - exp11);
-    else
-      exp11 = 1023 + (exp11 - 127);
-  }
-  return ((uint64_t)(bytes >> 31) << 63) 
-      | ((uint64_t)exp11 << 52)
-      | ((uint64_t)(bytes & 0x7FFFFF) << (52-23) );
-}
-
 // compares two binary strings and returns k, -k or 0
 // 0 meaning the two are identical. If not, k is length that matches
 int compare_bin(const byte *v1, byte len1, const byte *v2, byte len2) {
@@ -1036,7 +1076,7 @@ int compare_bin(const byte *v1, byte len1, const byte *v2, byte len2) {
 }
 
 // Compare values for binary search and return 1, -1 or 0
-int compare_vals(byte *val_at, uint32_t u32_at, int val_type, void *val, uint16_t len, byte is_rowid) {
+int compare_values(byte *val_at, uint32_t u32_at, int val_type, void *val, uint16_t len, byte is_rowid) {
   if (is_rowid)
     return (u32_at > *((uint32_t *) val) ? 1 : u32_at < *((uint32_t *) val) ? -1 : 0);
   switch (val_type) {
@@ -1075,15 +1115,17 @@ int compare_vals(byte *val_at, uint32_t u32_at, int val_type, void *val, uint16_
         bytes64 = *((uint64_t *) val);
       return (bytes64_at > bytes64 ? 1 : bytes64_at < bytes64 ? -1 : 0);
     case ULS_TYPE_BLOB:
-    case ULS_TYPE_TEXT:
+    case ULS_TYPE_TEXT: {
       uint32_t len_at = uls_derive_data_len(u32_at);
       int res = compare_bin(val_at, len_at, val, len);
       return (res > 0 ? 1 : (res < 0 ? -1 : 0));
+    }
   }
+  return 1;
 }
 
 // See .h file for API description
-int uls_bin_srch_row_by_val(struct uls_read_context *rctx,
+int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int col_idx,
       int val_type, void *val, uint16_t len, byte is_rowid) {
   int32_t page_size = get_pagesize(rctx->page_size_exp);
   if (rctx->last_leaf_page == 0)
@@ -1097,10 +1139,10 @@ int uls_bin_srch_row_by_val(struct uls_read_context *rctx,
     uint16_t rec_pos;
     byte *val_at;
     uint32_t u32_at;
-    res = read_last_val(rctx, middle, page_size, &u32_at, is_rowid, &rec_pos);
+    res = read_last_val(rctx, middle, page_size, col_idx, &val_at, &u32_at, &rec_pos, is_rowid);
     if (res)
       return res;
-    int cmp = compare_vals(val_at, u32_at, val_type, val, len, is_rowid);
+    int cmp = compare_values(val_at, u32_at, val_type, val, len, is_rowid);
     if (cmp == ULS_RES_TYPE_MISMATCH)
       return cmp;
     if (cmp < 0)
@@ -1125,10 +1167,10 @@ int uls_bin_srch_row_by_val(struct uls_read_context *rctx,
   while (first < size) {
     middle = (first + size) >> 1;
     uint32_t u32_at;
-    byte *val_at = read_val_at(rctx, middle, &u32_at);
-    if (res)
-      return res;
-    int cmp = compare_vals(val_at, u32_at, val_type, val, len, is_rowid);
+    byte *val_at = read_val_at(rctx, middle, col_idx, &u32_at, is_rowid);
+    if (!val_at)
+      return ULS_RES_NOT_FOUND;
+    int cmp = compare_values(val_at, u32_at, val_type, val, len, is_rowid);
     if (cmp == ULS_RES_TYPE_MISMATCH)
       return cmp;
     if (cmp < 0)
