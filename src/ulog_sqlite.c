@@ -622,18 +622,7 @@ int uls_set_col_val(struct uls_write_context *wctx,
   } else
   if (type == ULS_TYPE_REAL && len == 4) {
     // Assumes float is represented in IEEE-754 format
-    uint32_t bytes = *((uint32_t *) val);
-    uint8_t exp8 = (bytes >> 23) & 0xFF;
-    uint16_t exp11 = exp8;
-    if (exp11 != 0) {
-      if (exp11 < 127)
-        exp11 = 1023 - (127 - exp11);
-      else
-        exp11 = 1023 + (exp11 - 127);
-    }
-    uint64_t bytes64 = ((uint64_t)(bytes >> 31) << 63) 
-       | ((uint64_t)exp11 << 52)
-       | ((uint64_t)(bytes & 0x7FFFFF) << (52-23) );
+    uint64_t bytes64 = float_to_double(val);
     write_uint64(data_ptr, bytes64);
   } else
   if (type == ULS_TYPE_REAL && len == 8) {
@@ -1010,20 +999,92 @@ int uls_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid) {
   return ULS_RES_NOT_FOUND;
 }
 
+// Converts float to Sqlite's Big-endian double
+uint64_t float_to_double(const void *val) {
+  uint32_t bytes = *((uint32_t *) val);
+  uint8_t exp8 = (bytes >> 23) & 0xFF;
+  uint16_t exp11 = exp8;
+  if (exp11 != 0) {
+    if (exp11 < 127)
+      exp11 = 1023 - (127 - exp11);
+    else
+      exp11 = 1023 + (exp11 - 127);
+  }
+  return ((uint64_t)(bytes >> 31) << 63) 
+      | ((uint64_t)exp11 << 52)
+      | ((uint64_t)(bytes & 0x7FFFFF) << (52-23) );
+}
+
+// compares two binary strings and returns k, -k or 0
+// 0 meaning the two are identical. If not, k is length that matches
+int compare_bin(const byte *v1, byte len1, const byte *v2, byte len2) {
+  int k = 0;
+  int lim = (len2 < len1 ? len2 : len1);
+  while (k < lim) {
+    byte c1 = v1[k];
+    byte c2 = v2[k];
+    k++;
+    if (c1 < c2)
+      return -k;
+    else if (c1 > c2)
+      return k;
+  }
+  if (len1 == len2)
+    return 0;
+  k++;
+  return (len1 < len2 ? -k : k);
+}
+
+// Compare values for binary search and return 1, -1 or 0
 int compare_vals(byte *val_at, uint32_t u32_at, int val_type, void *val, uint16_t len, byte is_rowid) {
   if (is_rowid)
     return (u32_at > *((uint32_t *) val) ? 1 : u32_at < *((uint32_t *) val) ? -1 : 0);
   switch (val_type) {
     case ULS_TYPE_INT:
-    
+      if (u32_at != len)
+        return ULS_RES_TYPE_MISMATCH;
+      if (len == 4) {
+        int32_t iat = *((int32_t *) val_at);
+        int32_t ival = *((int32_t *) val);
+        return (iat > ival ? 1 : iat < ival ? -1 : 0);
+      }
+      if (len == 2) {
+        int16_t iat = *((int16_t *) val_at);
+        int16_t ival = *((int16_t *) val);
+        return (iat > ival ? 1 : iat < ival ? -1 : 0);
+      }
+      if (len == 6) {
+        int64_t iat = *((int64_t *) val_at);
+        int64_t ival = *((int64_t *) val);
+        return (iat > ival ? 1 : iat < ival ? -1 : 0);
+      }
+      if (len == 1) {
+        int8_t iat = *((int8_t *) val_at);
+        int8_t ival = *((int8_t *) val);
+        return (iat > ival ? 1 : iat < ival ? -1 : 0);
+      }
+      return ULS_RES_TYPE_MISMATCH;
     case ULS_TYPE_REAL:
-    case ULS_TYPE_TEXT:
+      if ((len != 4 && len != 8) || u32_at != 8)
+        return ULS_RES_TYPE_MISMATCH;
+      uint64_t bytes64, bytes64_at;
+        bytes64 = *((uint64_t *) val_at);
+      if (len == 4)
+        bytes64 = float_to_double(val);
+      else
+        bytes64 = *((uint64_t *) val);
+      return (bytes64_at > bytes64 ? 1 : bytes64_at < bytes64 ? -1 : 0);
     case ULS_TYPE_BLOB:
+    case ULS_TYPE_TEXT:
+      uint32_t len_at = uls_derive_data_len(u32_at);
+      int res = compare_bin(val_at, len_at, val, len);
+      return (res > 0 ? 1 : (res < 0 ? -1 : 0));
   }
 }
 
 // See .h file for API description
-int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int val_type, void *val, uint16_t len, byte is_rowid) {
+int uls_bin_srch_row_by_val(struct uls_read_context *rctx,
+      int val_type, void *val, uint16_t len, byte is_rowid) {
   int32_t page_size = get_pagesize(rctx->page_size_exp);
   if (rctx->last_leaf_page == 0)
     return ULS_RES_NOT_FINALIZED;
@@ -1040,6 +1101,8 @@ int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int val_type, void *v
     if (res)
       return res;
     int cmp = compare_vals(val_at, u32_at, val_type, val, len, is_rowid);
+    if (cmp == ULS_RES_TYPE_MISMATCH)
+      return cmp;
     if (cmp < 0)
       first = middle + 1;
     else if (cmp > 0)
@@ -1066,6 +1129,8 @@ int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int val_type, void *v
     if (res)
       return res;
     int cmp = compare_vals(val_at, u32_at, val_type, val, len, is_rowid);
+    if (cmp == ULS_RES_TYPE_MISMATCH)
+      return cmp;
     if (cmp < 0)
       first = middle + 1;
     else if (cmp > 0)

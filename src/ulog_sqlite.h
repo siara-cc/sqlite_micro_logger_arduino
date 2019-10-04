@@ -19,7 +19,8 @@ enum {ULS_RES_OK = 0, ULS_RES_ERR = -1, ULS_RES_INV_PAGE_SZ = -2,
       ULS_RES_TOO_LONG = -3, ULS_RES_WRITE_ERR = -4, ULS_RES_FLUSH_ERR = -5};
 
 enum {ULS_RES_SEEK_ERR = -6, ULS_RES_READ_ERR = -7, ULS_RES_INVALID_SIG = -8,
-      ULS_RES_MALFORMED = -9, ULS_RES_NOT_FOUND = -10, ULS_RES_NOT_FINALIZED = -11};
+      ULS_RES_MALFORMED = -9, ULS_RES_NOT_FOUND = -10, ULS_RES_NOT_FINALIZED = -11,
+      ULS_RES_TYPE_MISMATCH = -12};
 
 // Write context to be passed to create / append
 // a database.  The running values need not be supplied
@@ -144,7 +145,8 @@ int uls_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid);
 // Performs binary search on the inserted records
 // using the given Value and positions at the record found
 // Does not change position if record not found
-int uls_bin_srch_row_by_val(struct uls_read_context *rctx, byte *val, uint16_t len);
+int uls_bin_srch_row_by_val(struct uls_read_context *rctx,
+      int val_type, void *val, uint16_t len, byte is_rowid);
 
 #ifdef __cplusplus
 }
