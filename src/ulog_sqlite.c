@@ -69,6 +69,12 @@ int write_vint32(byte *ptr, uint32_t vint) {
   return len;
 }
 
+// Reads and returns big-endian uint8_t
+// at a given memory location
+uint8_t read_uint8(byte *ptr) {
+  return *ptr;
+}
+
 // Reads and returns big-endian uint16_t
 // at a given memory location
 uint16_t read_uint16(byte *ptr) {
@@ -83,6 +89,16 @@ uint32_t read_uint32(byte *ptr) {
   ret += ((uint32_t)*ptr++) << 16;
   ret += ((uint32_t)*ptr++) << 8;
   ret += *ptr;
+  return ret;
+}
+
+// Reads and returns big-endian uint32_t
+// at a given memory location
+uint64_t read_uint64(byte *ptr) {
+  uint32_t ret = 0;
+  int len = 8;
+  while (len--)
+    ret += (*ptr++ << (8 * len));
   return ret;
 }
 
@@ -972,14 +988,15 @@ byte *read_val_at(struct uls_read_context *rctx, uint32_t pos, int col_idx,
   int8_t vint_len;
   uint16_t rec_pos = read_uint16(rctx->buf + 8 + pos * 2);
   uint32_t row_id = read_vint32(rctx->buf + rec_pos + LEN_OF_REC_LEN, &vint_len);
-  if (is_rowid)
+  if (is_rowid) {
     *out_col_type = row_id;
-  else {
+    return (byte *) out_col_type;
+  } else {
     uint16_t hdr_len;
     uint16_t rec_len;
     byte *data_ptr;
     byte *hdr_ptr;
-    hdr_ptr = locate_column(rctx->buf, col_idx, &data_ptr, &rec_len, &hdr_len);
+    hdr_ptr = locate_column(rctx->buf + rec_pos, col_idx, &data_ptr, &rec_len, &hdr_len);
     if (!hdr_ptr)
       return NULL;
     *out_col_type = read_vint32(hdr_ptr, &vint_len);
@@ -1080,35 +1097,42 @@ int compare_values(byte *val_at, uint32_t u32_at, int val_type, void *val, uint1
   if (is_rowid)
     return (u32_at > *((uint32_t *) val) ? 1 : u32_at < *((uint32_t *) val) ? -1 : 0);
   switch (val_type) {
-    case ULS_TYPE_INT:
-      if (u32_at != len)
-        return ULS_RES_TYPE_MISMATCH;
-      if (len == 4) {
-        int32_t iat = *((int32_t *) val_at);
-        int32_t ival = *((int32_t *) val);
-        return (iat > ival ? 1 : iat < ival ? -1 : 0);
+    case ULS_TYPE_INT: {
+      int64_t ival_at;
+      switch (u32_at) {
+        case 4:
+          ival_at = (int64_t) read_uint32(val_at);
+          break;
+        case 2:
+          ival_at = (int64_t) read_uint16(val_at);
+          break;
+        case 6:
+          ival_at = read_uint64(val_at);
+          break;
+        case 1:
+          ival_at = (int64_t) read_uint8(val_at);
       }
-      if (len == 2) {
-        int16_t iat = *((int16_t *) val_at);
-        int16_t ival = *((int16_t *) val);
-        return (iat > ival ? 1 : iat < ival ? -1 : 0);
+      int64_t ival;
+      switch (len) {
+        case 4:
+          ival = *((int32_t *) val);
+          break;
+        case 2:
+          ival = *((int16_t *) val);
+          break;
+        case 8:
+          ival = *((int64_t *) val);
+          break;
+        case 1:
+          ival = *((int8_t *) val);
       }
-      if (len == 6) {
-        int64_t iat = *((int64_t *) val_at);
-        int64_t ival = *((int64_t *) val);
-        return (iat > ival ? 1 : iat < ival ? -1 : 0);
-      }
-      if (len == 1) {
-        int8_t iat = *((int8_t *) val_at);
-        int8_t ival = *((int8_t *) val);
-        return (iat > ival ? 1 : iat < ival ? -1 : 0);
-      }
-      return ULS_RES_TYPE_MISMATCH;
+      return ival_at > ival ? 1 : (ival_at < ival ? -1 : 0);
+    }
     case ULS_TYPE_REAL:
-      if ((len != 4 && len != 8) || u32_at != 8)
+      if ((len != 4 && len != 8) || u32_at != 7)
         return ULS_RES_TYPE_MISMATCH;
       uint64_t bytes64, bytes64_at;
-        bytes64 = *((uint64_t *) val_at);
+      bytes64_at = read_uint64(val_at);
       if (len == 4)
         bytes64 = float_to_double(val);
       else
@@ -1163,7 +1187,8 @@ int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int col_idx,
   if (res)
     return res;
   first = 0;
-  size = read_uint16(rctx->buf + 3);
+  int16_t rec_count = read_uint16(rctx->buf + 3);
+  size = rec_count;
   while (first < size) {
     middle = (first + size) >> 1;
     uint32_t u32_at;
@@ -1183,5 +1208,7 @@ int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int col_idx,
       return ULS_RES_OK;
     }
   }
-  return ULS_RES_NOT_FOUND;
+  rctx->cur_page = (found_at_page == rctx->last_leaf_page + 1 ? found_at_page - 1 : found_at_page);
+  rctx->cur_rec_pos = (rec_count == size ? size - 1 : size);
+  return ULS_RES_OK;
 }

@@ -154,7 +154,9 @@ void print_usage() {
   printf("    Appends to a Sqlite database created using -c above\n");
   printf("        with records in CSV format (page_size and col_count have to match)\n\n");
   printf("test_ulog_sqlite -r <db_name.db> <rowid>\n");
-  printf("    Searches db_name.db for given row_id using\n");
+  printf("    Searches <db_name.db> for given row_id and prints result\n\n");
+  printf("test_ulog_sqlite -b <db_name.db> <col_idx> <value>\n");
+  printf("    Searches <db_name.db> and column for given value using\n");
   printf("        binary search and prints result\n\n");
   printf("test_ulog_sqlite -n\n");
   printf("    Runs pre-defined tests and creates databases (verified manually)\n\n");
@@ -332,10 +334,96 @@ double read_double(const byte *ptr) {
   return ret;
 }
 
-int read_db(int argc, char *argv[]) {
-  byte initial_buf[72];
+void display_row(struct uls_read_context ctx) {
+  int col_count = uls_cur_row_col_count(&ctx);
+  for (int i = 0; i < col_count; i++) {
+    if (i)
+      putchar('|');
+    uint32_t col_type;
+    const byte *col_val = (const byte *) uls_read_col_val(&ctx, i, &col_type);
+    switch (col_type) {
+      case 0:
+        printf("null");
+        break;
+      case 1:
+        printf("%d", *((int8_t *)col_val));
+        break;
+      case 2:
+        if (1) {
+          int16_t ival = read_int16(col_val);
+          printf("%d", ival);
+        }
+        break;
+      case 4: {
+        int32_t ival = read_int32(col_val);
+        printf("%d", ival);
+        break;
+      }
+      case 6: {
+        int64_t ival = read_int64(col_val);
+        printf("%lld", ival);
+        break;
+      }
+      case 7: {
+        double dval = read_double(col_val);
+        printf("%lf", dval);
+        break;
+      }
+      default: {
+        uint32_t col_len = uls_derive_data_len(col_type);
+        for (int j = 0; j < col_len; j++) {
+          if (col_type % 2)
+            putchar(col_val[j]);
+          else
+            printf("x%2x ", col_val[j]);
+        }
+      }
+    }
+  }
+}
+
+extern void write_uint8(byte *ptr, uint8_t input);
+extern void write_uint16(byte *ptr, uint16_t input);
+extern void write_uint32(byte *ptr, uint32_t input);
+extern void write_uint64(byte *ptr, uint64_t input);
+
+int resolve_value(char *value, byte *out_val) {
+  byte isInt = 1;
+  byte isReal = 1;
+  char *chr = value;
+  while (*chr != '\0') {
+    if ((*chr < '0' || *chr > '9') && *chr != '-' && *chr != '.') {
+      isInt = 0;
+      isReal = 0;
+    } else {
+      if (*chr == '.')
+        isInt = 0;
+    }
+    chr++;
+  }
+  if (isInt) {
+    int64_t ival = (int64_t) atoll(value);
+    memcpy(out_val, &ival, sizeof(ival));
+    return ULS_TYPE_INT;
+  } else
+  if (isReal) {
+    double dval = atof(value);
+    memcpy(out_val, &dval, sizeof(dval));
+    return ULS_TYPE_REAL;
+  }
+  memcpy(out_val, value, strlen(value));
+  return ULS_TYPE_TEXT;
+}
+
+int bin_srch_db(int argc, char *argv[]) {
+  int len = strlen(argv[4]);
+  if (len > 71) {
+    printf("Value too long\n");
+    return -1;
+  }
+  byte buf[72];
   struct uls_read_context ctx;
-  ctx.buf = initial_buf;
+  ctx.buf = buf;
   ctx.read_fn = read_fn_rctx;
   fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
   if (fd == -1) {
@@ -346,57 +434,43 @@ int read_db(int argc, char *argv[]) {
     printf("Error during init\n");
     return -3;
   }
-  byte actual_buf[1 << (ctx.page_size_exp == 1 ? 16 : ctx.page_size_exp)];
-  ctx.buf = actual_buf;
+  byte page_buf[1 << (ctx.page_size_exp == 1 ? 16 : ctx.page_size_exp)];
+  ctx.buf = page_buf;
+  int col_idx = atol(argv[3]);
+  int val_type = resolve_value(argv[4], buf);
+  if (val_type == ULS_TYPE_INT || val_type == ULS_TYPE_REAL)
+    len = 8;
+  if (uls_bin_srch_row_by_val(&ctx, col_idx, val_type, 
+        buf, len, col_idx == -1 ? 1 : 0)) {
+    printf("Not Found\n");
+  } else {
+    display_row(ctx);
+  }
+  putchar('\n');
+  return 0;
+}
+
+int read_db(int argc, char *argv[]) {
+  byte buf[72];
+  struct uls_read_context ctx;
+  ctx.buf = buf;
+  ctx.read_fn = read_fn_rctx;
+  fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  if (fd == -1) {
+    perror("Error");
+    return -2;
+  }
+  if (uls_read_init(&ctx)) {
+    printf("Error during init\n");
+    return -3;
+  }
+  byte page_buf[1 << (ctx.page_size_exp == 1 ? 16 : ctx.page_size_exp)];
+  ctx.buf = page_buf;
   uint32_t rowid = atol(argv[3]);
   if (uls_srch_row_by_id(&ctx, rowid)) {
     printf("Not Found\n");
   } else {
-    int col_count = uls_cur_row_col_count(&ctx);
-    for (int i = 0; i < col_count; i++) {
-      if (i)
-        putchar('|');
-      uint32_t col_type;
-      const byte *col_val = (const byte *) uls_read_col_val(&ctx, i, &col_type);
-      switch (col_type) {
-        case 0:
-          printf("null");
-          break;
-        case 1:
-          printf("%d", *((int8_t *)col_val));
-          break;
-        case 2:
-          if (1) {
-            int16_t ival = read_int16(col_val);
-            printf("%d", ival);
-          }
-          break;
-        case 4: {
-          int32_t ival = read_int32(col_val);
-          printf("%d", ival);
-          break;
-        }
-        case 6: {
-          int64_t ival = read_int64(col_val);
-          printf("%lld", ival);
-          break;
-        }
-        case 7: {
-          double dval = read_double(col_val);
-          printf("%lf", dval);
-          break;
-        }
-        default: {
-          uint32_t col_len = uls_derive_data_len(col_type);
-          for (int j = 0; j < col_len; j++) {
-            if (col_type % 2)
-              putchar(col_val[j]);
-            else
-              printf("x%2x ", col_val[j]);
-          }
-        }
-      }
-    }
+    display_row(ctx);
   }
   putchar('\n');
   return 0;
@@ -412,6 +486,9 @@ int main(int argc, char *argv[]) {
   } else
   if (argc == 4 && strcmp(argv[1], "-r") == 0) {
     read_db(argc, argv);
+  } else
+  if (argc == 5 && strcmp(argv[1], "-b") == 0) {
+    bin_srch_db(argc, argv);
   } else
   if (argc == 2 && strcmp(argv[1], "-n") == 0) {
     test_basic("hello.db");
