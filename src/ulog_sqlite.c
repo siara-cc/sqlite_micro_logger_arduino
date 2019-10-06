@@ -135,7 +135,7 @@ uint32_t read_vint32(byte *ptr, int8_t *vlen) {
 }
 
 // Converts float to Sqlite's Big-endian double
-uint64_t float_to_double(const void *val) {
+int64_t float_to_double(const void *val) {
   uint32_t bytes = *((uint32_t *) val);
   uint8_t exp8 = (bytes >> 23) & 0xFF;
   uint16_t exp11 = exp8;
@@ -145,9 +145,9 @@ uint64_t float_to_double(const void *val) {
     else
       exp11 = 1023 + (exp11 - 127);
   }
-  return ((uint64_t)(bytes >> 31) << 63) 
-      | ((uint64_t)exp11 << 52)
-      | ((uint64_t)(bytes & 0x7FFFFF) << (52-23) );
+  return ((int64_t)(bytes >> 31) << 63) 
+      | ((int64_t)exp11 << 52)
+      | ((int64_t)(bytes & 0x7FFFFF) << (52-23) );
 }
 
 // Returns actual page size from given exponent
@@ -951,7 +951,7 @@ int uls_read_last_row(struct uls_read_context *rctx) {
 // to support low memory systems (2kb ram)
 // The underlying callback function hopefully optimizes repeated IO
 int read_last_val(struct uls_read_context *rctx, uint32_t pos,
-      int32_t page_size, int col_idx, byte **pval_at, 
+      int32_t page_size, int col_idx, byte *val_at, int val_len,
       uint32_t *out_col_type, uint16_t *out_rec_pos, byte is_rowid) {
   byte src_buf[12];
   int res = read_bytes_rctx(rctx, src_buf, pos * page_size, 12);
@@ -965,9 +965,9 @@ int read_last_val(struct uls_read_context *rctx, uint32_t pos,
   if (res)
     return res;
   int8_t vint_len;
-  uint32_t row_id = read_vint32(src_buf + 3, &vint_len);
+  uint32_t u32 = read_vint32(src_buf + 3, &vint_len);
   if (is_rowid)
-    *out_col_type = row_id;
+    *out_col_type = u32;
   else {
     uint16_t rec_len = read_vint16(src_buf, NULL) + vint_len + LEN_OF_REC_LEN;
     byte rec_buf[rec_len];
@@ -975,10 +975,15 @@ int read_last_val(struct uls_read_context *rctx, uint32_t pos,
     if (res)
       return res;
     uint16_t hdr_len;
-    byte *hdr_ptr = locate_column(rec_buf, col_idx, pval_at, &rec_len, &hdr_len);
+    byte *data_ptr;
+    byte *hdr_ptr = locate_column(rec_buf, col_idx, &data_ptr, &rec_len, &hdr_len);
     if (!hdr_ptr)
       return ULS_RES_NOT_FOUND;
     *out_col_type = read_vint32(hdr_ptr, &vint_len);
+    u32 = uls_derive_data_len(*out_col_type);
+    if (u32 > val_len)
+      u32 = val_len;
+    memcpy(val_at, data_ptr, val_len);
   }
   return ULS_RES_OK;
 }
@@ -1131,12 +1136,12 @@ int compare_values(byte *val_at, uint32_t u32_at, int val_type, void *val, uint1
     case ULS_TYPE_REAL:
       if ((len != 4 && len != 8) || u32_at != 7)
         return ULS_RES_TYPE_MISMATCH;
-      uint64_t bytes64, bytes64_at;
+      int64_t bytes64, bytes64_at;
       bytes64_at = read_uint64(val_at);
       if (len == 4)
         bytes64 = float_to_double(val);
       else
-        bytes64 = *((uint64_t *) val);
+        bytes64 = *((int64_t *) val);
       return (bytes64_at > bytes64 ? 1 : bytes64_at < bytes64 ? -1 : 0);
     case ULS_TYPE_BLOB:
     case ULS_TYPE_TEXT: {
@@ -1161,9 +1166,10 @@ int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int col_idx,
   while (first < size) {
     middle = (first + size) >> 1;
     uint16_t rec_pos;
-    byte *val_at;
+    byte val_at[len + 1];
     uint32_t u32_at;
-    res = read_last_val(rctx, middle, page_size, col_idx, &val_at, &u32_at, &rec_pos, is_rowid);
+    res = read_last_val(rctx, middle, page_size, col_idx, 
+            val_at, len + 1, &u32_at, &rec_pos, is_rowid);
     if (res)
       return res;
     int cmp = compare_values(val_at, u32_at, val_type, val, len, is_rowid);
@@ -1182,12 +1188,14 @@ int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int col_idx,
       return ULS_RES_OK;
     }
   }
+  if (size == rctx->last_leaf_page + 1)
+    size--;
   uint32_t found_at_page = size;
   res = read_bytes_rctx(rctx, rctx->buf, size * page_size, page_size);
   if (res)
     return res;
   first = 0;
-  int16_t rec_count = read_uint16(rctx->buf + 3);
+  int16_t rec_count = read_uint16(rctx->buf + 3) - 1;
   size = rec_count;
   while (first < size) {
     middle = (first + size) >> 1;
@@ -1208,7 +1216,7 @@ int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int col_idx,
       return ULS_RES_OK;
     }
   }
-  rctx->cur_page = (found_at_page == rctx->last_leaf_page + 1 ? found_at_page - 1 : found_at_page);
-  rctx->cur_rec_pos = (rec_count == size ? size - 1 : size);
+  rctx->cur_page = found_at_page;
+  rctx->cur_rec_pos = size;
   return ULS_RES_OK;
 }

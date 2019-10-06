@@ -8,6 +8,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <time.h>
 
 int fd;
 
@@ -61,7 +63,7 @@ int test_multilevel(char *filename) {
   byte buf[page_size];
   struct uls_write_context ctx;
   ctx.buf = buf;
-  ctx.col_count = 4;
+  ctx.col_count = 5;
   ctx.page_size_exp = 9;
   ctx.max_pages_exp = 0;
   ctx.page_resv_bytes = 0;
@@ -72,21 +74,51 @@ int test_multilevel(char *filename) {
   unlink(filename);
   fd = open(filename, O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
 
-  char txt[11];
+  char txt[24];
+  struct tm *t;
+  struct timeval tv;
   uls_write_init(&ctx);
   int32_t max_rows = 1000000;
   for (int32_t i = 0; i < max_rows; i++) {
     double d = i;
     d /= 2;
-    uls_set_col_val(&ctx, 0, ULS_TYPE_INT, &i, sizeof(i));
-    uls_set_col_val(&ctx, 1, ULS_TYPE_REAL, &d, sizeof(d));
+    gettimeofday(&tv, NULL);
+    t = localtime(&tv.tv_sec);
+    t->tm_year += 1900;
+    txt[0] = '0' + (t->tm_year / 1000) % 10;
+    txt[1] = '0' + (t->tm_year / 100) % 10;
+    txt[2] = '0' + (t->tm_year / 10) % 10;
+    txt[3] = '0' + t->tm_year % 10;
+    txt[4] = '-';
+    t->tm_mon++;
+    txt[5] = '0' + (t->tm_mon / 10) % 10;
+    txt[6] = '0' + t->tm_mon % 10;
+    txt[7] = '-';
+    txt[8] = '0' + (t->tm_mday / 10) % 10;
+    txt[9] = '0' + t->tm_mday % 10;
+    txt[10] = ' ';
+    txt[11] = '0' + (t->tm_hour / 10) % 10;
+    txt[12] = '0' + t->tm_hour % 10;
+    txt[13] = ':';
+    txt[14] = '0' + (t->tm_min / 10) % 10;
+    txt[15] = '0' + t->tm_min % 10;
+    txt[16] = ':';
+    txt[17] = '0' + (t->tm_sec / 10) % 10;
+    txt[18] = '0' + t->tm_sec % 10;
+    txt[19] = '.';
+    txt[20] = '0' + (tv.tv_usec / 100000) % 10;
+    txt[21] = '0' + (tv.tv_usec / 10000) % 10;
+    txt[22] = '0' + (tv.tv_usec / 1000) % 10;
+    uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, txt, 23);
+    uls_set_col_val(&ctx, 1, ULS_TYPE_INT, &i, sizeof(i));
+    uls_set_col_val(&ctx, 2, ULS_TYPE_REAL, &d, sizeof(d));
     d = rand();
     d /= 1000;
-    uls_set_col_val(&ctx, 2, ULS_TYPE_REAL, &d, sizeof(d));
+    uls_set_col_val(&ctx, 3, ULS_TYPE_REAL, &d, sizeof(d));
     int txt_len = rand() % 10;
     for (int j = 0; j < txt_len; j++)
       txt[j] = 'a' + (char)(rand() % 26);
-    uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, txt, txt_len);
+    uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, txt, txt_len);
     if (i < max_rows - 1)
       uls_create_new_row(&ctx);
   }
