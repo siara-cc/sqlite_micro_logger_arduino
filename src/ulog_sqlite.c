@@ -983,7 +983,7 @@ int read_last_val(struct uls_read_context *rctx, uint32_t pos,
     u32 = uls_derive_data_len(*out_col_type);
     if (u32 > val_len)
       u32 = val_len;
-    memcpy(val_at, data_ptr, val_len);
+    memcpy(val_at, data_ptr, u32);
   }
   return ULS_RES_OK;
 }
@@ -1097,40 +1097,53 @@ int compare_bin(const byte *v1, byte len1, const byte *v2, byte len2) {
   return (len1 < len2 ? -k : k);
 }
 
+int64_t convert_to_i64(byte *val, int len, byte is_big_endian) {
+  int64_t ival_at = 0;
+  switch (len) {
+    case 4: {
+      uint32_t u32_val_at = (is_big_endian ? read_uint32(val) : *((uint32_t *) val));
+      if (u32_val_at & 0x80000000) {
+        ival_at = 0xFFFFFFFF - u32_val_at;
+        ival_at = 0xFFFFFFFFFFFFFFFF - ival_at;
+      } else
+        ival_at = u32_val_at;
+      break;
+    }
+    case 2: {
+      uint16_t u16_val_at = (is_big_endian ? read_uint16(val) : *((uint16_t *) val));
+      ival_at = u16_val_at & 0x7FFF;
+      if (u16_val_at & 0x8000) {
+        ival_at = 0xFFFF - u16_val_at;
+        ival_at = 0xFFFFFFFFFFFFFFFF - ival_at;
+      } else
+        ival_at = u16_val_at;
+      break;
+    }
+    case 6:
+    case 8:
+      ival_at = (is_big_endian ? read_uint64(val) : *((int64_t *) val));
+      break;
+    case 1: {
+      uint8_t u8_val_at = (is_big_endian ? read_uint8(val) : *((uint8_t *) val));
+      ival_at = u8_val_at & 0x7F;
+      if (u8_val_at & 0x80) {
+        ival_at = 0xFF - u8_val_at;
+        ival_at = 0xFFFFFFFFFFFFFFFF - ival_at;
+      } else
+        ival_at = u8_val_at;
+    }
+  }
+  return ival_at;
+}
+
 // Compare values for binary search and return 1, -1 or 0
 int compare_values(byte *val_at, uint32_t u32_at, int val_type, void *val, uint16_t len, byte is_rowid) {
   if (is_rowid)
     return (u32_at > *((uint32_t *) val) ? 1 : u32_at < *((uint32_t *) val) ? -1 : 0);
   switch (val_type) {
     case ULS_TYPE_INT: {
-      int64_t ival_at;
-      switch (u32_at) {
-        case 4:
-          ival_at = (int64_t) read_uint32(val_at);
-          break;
-        case 2:
-          ival_at = (int64_t) read_uint16(val_at);
-          break;
-        case 6:
-          ival_at = read_uint64(val_at);
-          break;
-        case 1:
-          ival_at = (int64_t) read_uint8(val_at);
-      }
-      int64_t ival;
-      switch (len) {
-        case 4:
-          ival = *((int32_t *) val);
-          break;
-        case 2:
-          ival = *((int16_t *) val);
-          break;
-        case 8:
-          ival = *((int64_t *) val);
-          break;
-        case 1:
-          ival = *((int8_t *) val);
-      }
+      int64_t ival_at = convert_to_i64(val_at, u32_at, 1);
+      int64_t ival = convert_to_i64(val, len, 0);
       return ival_at > ival ? 1 : (ival_at < ival ? -1 : 0);
     }
     case ULS_TYPE_REAL:

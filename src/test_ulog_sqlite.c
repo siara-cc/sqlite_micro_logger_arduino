@@ -110,7 +110,8 @@ int test_multilevel(char *filename) {
     txt[21] = '0' + (tv.tv_usec / 10000) % 10;
     txt[22] = '0' + (tv.tv_usec / 1000) % 10;
     uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, txt, 23);
-    uls_set_col_val(&ctx, 1, ULS_TYPE_INT, &i, sizeof(i));
+    int32_t ival = i - max_rows / 2;
+    uls_set_col_val(&ctx, 1, ULS_TYPE_INT, &ival, sizeof(ival));
     uls_set_col_val(&ctx, 2, ULS_TYPE_REAL, &d, sizeof(d));
     d = rand();
     d /= 1000;
