@@ -1,3 +1,29 @@
+/*
+  Sqlite Micro Logger
+
+  Fast, Lean and Mean Sqlite database logger targetting
+  low memory systems such as Microcontrollers.
+
+  This Library can work on systems that have as little as 2kb,
+  such as the ATMega328 MCU.  It is available for the Arduino platform.
+
+  https://github.com/siara-in/sqlite_micro_logger
+
+  Copyright 2019 Arundale Ramanathan, Siara Logics (in)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+*/
+
 #ifndef __ULOG_SQLITE__
 #define __ULOG_SQLITE__
 
@@ -62,7 +88,13 @@ int uls_init_for_append(struct uls_write_context *wctx);
 // Creates new record with all columns null
 // If no more space in page, writes it to disk
 // creates new page, and creates a new record
-int uls_create_new_row(struct uls_write_context *wctx);
+int uls_append_new_row(struct uls_write_context *wctx);
+
+// Creates new record with given column values
+// If no more space in page, writes it to disk
+// creates new page, and creates a new record
+int uls_append_new_row_with_values(struct uls_write_context *wctx,
+      uint8_t types[], const void *values[], uint16_t lengths[]);
 
 // Sets value of column in the current record for the given column index
 // If no more space in page, writes it to disk
@@ -144,7 +176,8 @@ int uls_srch_row_by_id(struct uls_read_context *rctx, uint32_t rowid);
 
 // Performs binary search on the inserted records
 // using the given Value and positions at the record found
-// Does not change position if record not found
+// Changes current position to closest match, if record not found
+// is_rowid = 1 is used to do Binary Search by RowId
 int uls_bin_srch_row_by_val(struct uls_read_context *rctx, int col_idx,
       int val_type, void *val, uint16_t len, byte is_rowid);
 

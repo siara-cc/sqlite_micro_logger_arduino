@@ -1,3 +1,29 @@
+/*
+  Sqlite Micro Logger
+
+  Fast, Lean and Mean Sqlite database logger targetting
+  low memory systems such as Microcontrollers.
+
+  This Library can work on systems that have as little as 2kb,
+  such as the ATMega328 MCU.  It is available for the Arduino platform.
+
+  https://github.com/siara-in/sqlite_micro_logger
+
+  Copyright 2019 Arundale Ramanathan, Siara Logics (in)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+*/
+
 #include "ulog_sqlite.h"
 
 #include <stdlib.h>
@@ -160,7 +186,7 @@ int32_t get_pagesize(byte page_size_exp) {
 uint16_t acquire_last_pos(struct uls_write_context *wctx, byte *ptr) {
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0) {
-    uls_create_new_row(wctx);
+    uls_append_new_row(wctx);
     last_pos = read_uint16(ptr + 5);
   }
   return last_pos;
@@ -437,7 +463,7 @@ int form_page1(struct uls_write_context *wctx, char *table_name, char *table_scr
   int orig_col_count = wctx->col_count;
   wctx->cur_write_page = 0;
   wctx->col_count = 5;
-  uls_create_new_row(wctx);
+  uls_append_new_row(wctx);
   uls_set_col_val(wctx, 0, ULS_TYPE_TEXT, "table", 5);
   if (table_name == NULL)
     table_name = default_table_name;
@@ -479,7 +505,6 @@ int form_page1(struct uls_write_context *wctx, char *table_name, char *table_scr
   wctx->cur_write_page = 1;
   wctx->cur_write_rowid = 0;
   init_bt_tbl_leaf(wctx->buf);
-  uls_create_new_row(wctx);
 
   return ULS_RES_OK;
 
@@ -550,7 +575,7 @@ int uls_write_init(struct uls_write_context *wctx) {
 }
 
 // See .h file for API description
-int uls_create_new_row(struct uls_write_context *wctx) {
+int uls_append_new_row(struct uls_write_context *wctx) {
 
   wctx->cur_write_rowid++;
   byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
@@ -821,7 +846,7 @@ int uls_init_for_append(struct uls_write_context *wctx) {
   res = read_bytes_wctx(wctx, wctx->buf, wctx->cur_write_page * page_size, page_size);
   if (res)
     return res;
-  res = uls_create_new_row(wctx);
+  res = uls_append_new_row(wctx);
   if (res)
     return res;
   return ULS_RES_OK;

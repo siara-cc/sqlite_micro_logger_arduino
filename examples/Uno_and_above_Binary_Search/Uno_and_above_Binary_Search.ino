@@ -1,22 +1,44 @@
+/*
+  This example demonstrates how the Sqlite Micro Logger library
+  can be used to write Analog data into Sqlite database.
+  Works on any Arduino compatible microcontroller with SD Card attachment
+  having 2kb RAM or more (such as Arduino Uno).
+
+  How Sqlite Micro Logger works:
+  https://github.com/siara-in/sqlite_micro_logger
+
+  Copyright 2019 Arundale Ramanathan, Siara Logics (in)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+*/
 #include "ulog_sqlite.h"
 #include <SPI.h>
 #include <SD.h>
 
 File myFile;
 
-int32_t read_fn(struct uls_write_context *ctx, void *buf, size_t len) {
+#define SD_CS_PIN 8
+
+int32_t read_fn(struct uls_write_context *ctx, void *buf, long pos, size_t len) {
+  myFile.seek(pos);
   size_t ret = myFile.read((byte *)buf, len);
   if (ret != len)
     return ULS_RES_READ_ERR;
   return ret;
 }
 
-int seek_fn(struct uls_write_context *ctx, long pos) {
+int32_t write_fn(struct uls_write_context *ctx, void *buf, long pos, size_t len) {
   myFile.seek(pos);
-  return ULS_RES_OK;
-}
-
-int32_t write_fn(struct uls_write_context *ctx, void *buf, size_t len) {
   size_t ret = myFile.write((byte *)buf, len);
   if (ret != len)
     return ULS_RES_ERR;
@@ -64,7 +86,6 @@ int input_num() {
   return ret;
 }
 
-#define SD_CS_PIN 8
 bool isInited = false;
 void setup() {
   // Open serial communications and wait for port to open:
@@ -97,12 +118,10 @@ void loop() {
   Serial.print(F("\nSqlite uLogger\n"));
   Serial.print(F("DB name: "));
   input_string(filename, sizeof(filename));
-  Serial.print(F("\nEntry count: "));
+  Serial.print(F("\nRecord count: "));
   num_entries = input_num();
   Serial.print(F("\nDelay(ms): "));
   dly = input_num();
-
-  //buf = (byte *) SD.file()->cacheClear();
 
   // open the file. note that only one file can be open at a time,
   // so you have to close this one before opening another.
@@ -116,7 +135,6 @@ void loop() {
     ctx.page_size_exp = 9;
     ctx.max_pages_exp = 0;
     ctx.read_fn = read_fn;
-    ctx.seek_fn = seek_fn;
     ctx.flush_fn = flush_fn;
     ctx.write_fn = write_fn;
     int res = uls_write_init(&ctx);
@@ -129,7 +147,7 @@ void loop() {
             break;
         }
         if (num_entries) {
-          res = uls_create_new_row(&ctx);
+          res = uls_append_new_row(&ctx);
           if (res)
             break;
           delay(dly);

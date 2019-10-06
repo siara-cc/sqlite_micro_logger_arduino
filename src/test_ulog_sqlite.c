@@ -1,3 +1,29 @@
+/*
+  Testing program for Sqlite Micro Logger
+
+  Sqlite Micro Logger is a Fast, Lean and Mean 
+  Sqlite database logger targetting low memory systems such as Microcontrollers.
+
+  This Library can work on systems that have as little as 2kb,
+  such as the ATMega328 MCU.  It is available for the Arduino platform.
+
+  https://github.com/siara-in/sqlite_micro_logger
+
+  Copyright 2019 Arundale Ramanathan, Siara Logics (in)
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+*/
+
 #ifndef ARDUINO
 
 #include "ulog_sqlite.h"
@@ -121,7 +147,7 @@ int test_multilevel(char *filename) {
       txt[j] = 'a' + (char)(rand() % 26);
     uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, txt, txt_len);
     if (i < max_rows - 1)
-      uls_create_new_row(&ctx);
+      uls_append_new_row(&ctx);
   }
   if (uls_finalize(&ctx)) {
     printf("Error during finalize\n");
@@ -156,7 +182,7 @@ int test_basic(char *filename) {
   uls_set_col_val(&ctx, 2, ULS_TYPE_TEXT, "How", 3);
   uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "Are", 3);
   uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, "You", 3);
-  uls_create_new_row(&ctx);
+  uls_append_new_row(&ctx);
   uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, "I", 1);
   uls_set_col_val(&ctx, 1, ULS_TYPE_TEXT, "am", 2);
   uls_set_col_val(&ctx, 2, ULS_TYPE_TEXT, "fine", 4);
@@ -190,7 +216,7 @@ void print_usage() {
   printf("    Searches <db_name.db> for given row_id and prints result\n\n");
   printf("test_ulog_sqlite -b <db_name.db> <col_idx> <value>\n");
   printf("    Searches <db_name.db> and column for given value using\n");
-  printf("        binary search and prints result\n\n");
+  printf("        binary search and prints result. col_idx starts from 0.\n\n");
   printf("test_ulog_sqlite -n\n");
   printf("    Runs pre-defined tests and creates databases (verified manually)\n\n");
 }
@@ -264,7 +290,7 @@ int append_records(int argc, char *argv[], struct uls_write_context *ctx) {
       return -4;
     }
     if (i < argc - 1) {
-      if (uls_create_new_row(ctx)) {
+      if (uls_append_new_row(ctx)) {
         printf("Error during add col\n");
         return -5;
       }
