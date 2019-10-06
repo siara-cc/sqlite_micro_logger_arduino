@@ -252,6 +252,10 @@ int append_records(int argc, char *argv[], struct uls_write_context *ctx) {
       } else {
         if (*chr == '.')
           isInt = 0;
+        if (*chr == '-' && chr > col_data) {
+          isInt = 0;
+          isReal = 0;
+        }
       }
       chr++;
     }
@@ -431,6 +435,10 @@ int resolve_value(char *value, byte *out_val) {
     } else {
       if (*chr == '.')
         isInt = 0;
+      if (*chr == '-' && chr > value) {
+        isInt = 0;
+        isReal = 0;
+      }
     }
     chr++;
   }
