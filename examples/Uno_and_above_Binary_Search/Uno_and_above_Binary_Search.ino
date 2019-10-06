@@ -147,7 +147,7 @@ void loop() {
             break;
         }
         if (num_entries) {
-          res = uls_append_new_row(&ctx);
+          res = uls_append_row(&ctx);
           if (res)
             break;
           delay(dly);

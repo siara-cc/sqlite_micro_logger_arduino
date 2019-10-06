@@ -1,8 +1,8 @@
 /*
   Testing program for Sqlite Micro Logger
 
-  Sqlite Micro Logger is a Fast, Lean and Mean 
-  Sqlite database logger targetting low memory systems such as Microcontrollers.
+  Sqlite Micro Logger is a Fast and Lean
+  Sqlite database logger targetting low RAM systems such as Microcontrollers.
 
   This Library can work on systems that have as little as 2kb,
   such as the ATMega328 MCU.  It is available for the Arduino platform.
@@ -85,12 +85,12 @@ int flush_fn(struct uls_write_context *ctx) {
 
 int test_multilevel(char *filename) {
 
-  int32_t page_size = 512;
+  int32_t page_size = 65536;
   byte buf[page_size];
   struct uls_write_context ctx;
   ctx.buf = buf;
   ctx.col_count = 5;
-  ctx.page_size_exp = 9;
+  ctx.page_size_exp = 16;
   ctx.max_pages_exp = 0;
   ctx.page_resv_bytes = 0;
   ctx.read_fn = read_fn;
@@ -106,8 +106,6 @@ int test_multilevel(char *filename) {
   uls_write_init(&ctx);
   int32_t max_rows = 1000000;
   for (int32_t i = 0; i < max_rows; i++) {
-    double d = i;
-    d /= 2;
     gettimeofday(&tv, NULL);
     t = localtime(&tv.tv_sec);
     t->tm_year += 1900;
@@ -135,19 +133,26 @@ int test_multilevel(char *filename) {
     txt[20] = '0' + (tv.tv_usec / 100000) % 10;
     txt[21] = '0' + (tv.tv_usec / 10000) % 10;
     txt[22] = '0' + (tv.tv_usec / 1000) % 10;
-    uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, txt, 23);
     int32_t ival = i - max_rows / 2;
-    uls_set_col_val(&ctx, 1, ULS_TYPE_INT, &ival, sizeof(ival));
-    uls_set_col_val(&ctx, 2, ULS_TYPE_REAL, &d, sizeof(d));
-    d = rand();
-    d /= 1000;
-    uls_set_col_val(&ctx, 3, ULS_TYPE_REAL, &d, sizeof(d));
+    double d1 = i;
+    d1 /= 2;
+    double d2 = rand();
+    d2 /= 1000;
     int txt_len = rand() % 10;
+    char txt1[11];
     for (int j = 0; j < txt_len; j++)
-      txt[j] = 'a' + (char)(rand() % 26);
+      txt1[j] = 'a' + (char)(rand() % 26);
+    /*uint8_t types[] = {ULS_TYPE_TEXT, ULS_TYPE_INT, ULS_TYPE_REAL, ULS_TYPE_REAL, ULS_TYPE_TEXT};
+    void *values[] = {txt, &ival, &d1, &d2, txt1};
+    uint16_t lengths[] = {23, sizeof(ival), sizeof(d1), sizeof(d2), txt_len};
+    uls_append_row_with_values(&ctx, types, (const void **) values, lengths);*/
+    uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, txt, 23);
+    uls_set_col_val(&ctx, 1, ULS_TYPE_INT, &ival, sizeof(ival));
+    uls_set_col_val(&ctx, 2, ULS_TYPE_REAL, &d1, sizeof(d1));
+    uls_set_col_val(&ctx, 3, ULS_TYPE_REAL, &d2, sizeof(d2));
     uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, txt, txt_len);
     if (i < max_rows - 1)
-      uls_append_new_row(&ctx);
+      uls_append_row(&ctx);
   }
   if (uls_finalize(&ctx)) {
     printf("Error during finalize\n");
@@ -182,11 +187,10 @@ int test_basic(char *filename) {
   uls_set_col_val(&ctx, 2, ULS_TYPE_TEXT, "How", 3);
   uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "Are", 3);
   uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, "You", 3);
-  uls_append_new_row(&ctx);
+  uls_append_row(&ctx);
   uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, "I", 1);
   uls_set_col_val(&ctx, 1, ULS_TYPE_TEXT, "am", 2);
   uls_set_col_val(&ctx, 2, ULS_TYPE_TEXT, "fine", 4);
-  //uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "Suillus bovinus, the Jersey cow mushroom, is a pored mushroom in the family Suillaceae. A common fungus native to Europe and Asia, it has been introduced to North America and Australia. It was initially described as Boletus bovinus by Carl Linnaeus in 1753, and given its current binomial name by Henri François Anne de Roussel in 1806. It is an edible mushroom, though not highly regarded. The fungus grows in coniferous forests in its native range, and pine plantations elsewhere. It is sometimes parasitised by the related mushroom Gomphidius roseus. S. bovinus produces spore-bearing mushrooms, often in large numbers, each with a convex grey-yellow or ochre cap reaching up to 10 cm (4 in) in diameter, flattening with age. As in other boletes, the cap has spore tubes extending downward from the underside, rather than gills. The pore surface is yellow. The stalk, more slender than those of other Suillus boletes, lacks a ring. (Full article...)", 953);
   uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "thank", 5);
   uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, "you", 3);
   if (uls_finalize(&ctx)) {
@@ -290,7 +294,7 @@ int append_records(int argc, char *argv[], struct uls_write_context *ctx) {
       return -4;
     }
     if (i < argc - 1) {
-      if (uls_append_new_row(ctx)) {
+      if (uls_append_row(ctx)) {
         printf("Error during add col\n");
         return -5;
       }

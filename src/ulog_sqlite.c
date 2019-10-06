@@ -1,8 +1,8 @@
 /*
   Sqlite Micro Logger
 
-  Fast, Lean and Mean Sqlite database logger targetting
-  low memory systems such as Microcontrollers.
+  Fast and Lean Sqlite database logger targetting
+  low RAM systems such as Microcontrollers.
 
   This Library can work on systems that have as little as 2kb,
   such as the ATMega328 MCU.  It is available for the Arduino platform.
@@ -32,10 +32,11 @@
 
 #define LEN_OF_REC_LEN 3
 #define LEN_OF_HDR_LEN 2
+#define CHKSUM_LEN 3
 
 // Returns how many bytes the given integer will
 // occupy if stored as a variable integer
-int8_t get_sizeof_vint16(uint16_t vint) {
+int8_t get_vlen_of_uint16(uint16_t vint) {
   return vint > 16383 ? 3 : (vint > 127 ? 2 : 1);
 }
 
@@ -78,7 +79,7 @@ void write_uint64(byte *ptr, uint64_t input) {
 // Stores the given uint16_t in the given location
 // in variable integer format
 int write_vint16(byte *ptr, uint16_t vint) {
-  int len = get_sizeof_vint16(vint);
+  int len = get_vlen_of_uint16(vint);
   for (int i = len - 1; i > 0; i--)
     *ptr++ = 0x80 + ((vint >> (7 * i)) & 0x7F);
   *ptr = vint & 0x7F;
@@ -186,7 +187,7 @@ int32_t get_pagesize(byte page_size_exp) {
 uint16_t acquire_last_pos(struct uls_write_context *wctx, byte *ptr) {
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0) {
-    uls_append_new_row(wctx);
+    uls_append_row(wctx);
     last_pos = read_uint16(ptr + 5);
   }
   return last_pos;
@@ -243,6 +244,25 @@ uint32_t derive_col_type_or_len(int type, const void *val, int len) {
     }
   }
   return col_type_or_len;    
+}
+
+byte c1, c2, c3;
+void saveChecksumBytes(byte * ptr) {
+  uint16_t last_pos = read_uint16(ptr + 5);
+  ptr += last_pos;
+  ptr--;
+  c1 = *ptr--;
+  c2 = *ptr--;
+  c3 = *ptr;
+}
+
+void restoreChecksumBytes(byte * ptr) {
+  uint16_t last_pos = read_uint16(ptr + 5);
+  ptr += last_pos;
+  ptr--;
+  *ptr-- = c1;
+  *ptr-- = c2;
+  *ptr = c3;
 }
 
 // Initializes the buffer as a B-Tree Leaf table
@@ -369,11 +389,9 @@ int check_sums(byte *buf, int32_t page_size, int check_or_calc) {
   } else { // Assume first page
     int i = 0;
     uint8_t chk_sum = 0;
-    while (i < 69)
-      chk_sum += buf[i++];
-    i = 70;
     while (i < page_size)
       chk_sum += buf[i++];
+    chk_sum -= buf[69];
     if (check_or_calc)
       buf[69] = chk_sum;
     else {
@@ -386,6 +404,7 @@ int check_sums(byte *buf, int32_t page_size, int check_or_calc) {
 
 // Writes a page to disk using the given callback function
 int write_page(struct uls_write_context *wctx, uint32_t page_no, int32_t page_size) {
+  check_sums(wctx->buf, page_size, 1);
   if ((wctx->write_fn)(wctx, wctx->buf, page_no * page_size, page_size) != page_size)
     return ULS_RES_WRITE_ERR;
   return ULS_RES_OK;
@@ -463,7 +482,7 @@ int form_page1(struct uls_write_context *wctx, char *table_name, char *table_scr
   int orig_col_count = wctx->col_count;
   wctx->cur_write_page = 0;
   wctx->col_count = 5;
-  uls_append_new_row(wctx);
+  uls_append_row(wctx);
   uls_set_col_val(wctx, 0, ULS_TYPE_TEXT, "table", 5);
   if (table_name == NULL)
     table_name = default_table_name;
@@ -548,7 +567,7 @@ const void *get_col_val(byte *buf, uint16_t rec_data_pos, int col_idx, uint32_t 
 int check_signature(byte *buf) {
   if (memcmp(buf, uls_sig, 16) && memcmp(buf, sqlite_sig, 16))
     return ULS_RES_INVALID_SIG;
-  if (read_uint32(buf + 68) != 0xA5000000)
+  if (buf[68] != 0xA5)
     return ULS_RES_INVALID_SIG;
   return ULS_RES_OK;
 }
@@ -574,23 +593,19 @@ int uls_write_init(struct uls_write_context *wctx) {
   return uls_write_init_with_script(wctx, 0, 0);
 }
 
-// See .h file for API description
-int uls_append_new_row(struct uls_write_context *wctx) {
-
-  wctx->cur_write_rowid++;
+// Checks space for appending new row
+// If space not available, writes current buffer to disk and
+// initializes buffer as new page
+uint16_t check_space_for_new_row(struct uls_write_context *wctx, int32_t page_size,
+           int rec_count, uint16_t len_of_rec_len_rowid, uint16_t new_rec_len) {
   byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
-  int rec_count = read_uint16(ptr + 3) + 1;
-  int32_t page_size = get_pagesize(wctx->page_size_exp);
-  uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_vlen_of_uint32(wctx->cur_write_rowid);
-  uint16_t new_rec_len = wctx->col_count;
-  new_rec_len += LEN_OF_HDR_LEN;
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0)
     last_pos = page_size - wctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
   else {
     last_pos -= new_rec_len;
     last_pos -= len_of_rec_len_rowid;
-    if (last_pos < (ptr - wctx->buf) + 9 + rec_count * 2) {
+    if (last_pos < (ptr - wctx->buf) + 9 + CHKSUM_LEN + rec_count * 2) {
       int res = write_page(wctx, wctx->cur_write_page, page_size);
       if (res)
         return res;
@@ -600,10 +615,97 @@ int uls_append_new_row(struct uls_write_context *wctx) {
       rec_count = 1;
     }
   }
+  return last_pos;
+}
+
+// Writes given value at given pointer in Sqlite format
+uint16_t write_data(byte *data_ptr, int type, const void *val, uint16_t len) {
+  if (type == ULS_TYPE_INT) {
+    switch (len) {
+      case 1:
+        write_uint8(data_ptr, *((int8_t *) val));
+        break;
+      case 2:
+        write_uint16(data_ptr, *((int16_t *) val));
+        break;
+      case 4:
+        write_uint32(data_ptr, *((int32_t *) val));
+        break;
+      case 8:
+        write_uint64(data_ptr, *((int64_t *) val));
+        break;
+    }
+  } else
+  if (type == ULS_TYPE_REAL && len == 4) {
+    // Assumes float is represented in IEEE-754 format
+    uint64_t bytes64 = float_to_double(val);
+    write_uint64(data_ptr, bytes64);
+    len = 8;
+  } else
+  if (type == ULS_TYPE_REAL && len == 8) {
+    // Assumes double is represented in IEEE-754 format
+    uint64_t bytes = *((uint64_t *) val);
+    write_uint64(data_ptr, bytes);
+  } else
+    memcpy(data_ptr, val, len);
+  return len;
+}
+
+// See .h file for API description
+int uls_append_row_with_values(struct uls_write_context *wctx,
+      uint8_t types[], const void *values[], uint16_t lengths[]) {
+
+  wctx->cur_write_rowid++;
+  byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
+  int rec_count = read_uint16(ptr + 3) + 1;
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
+  uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_vlen_of_uint32(wctx->cur_write_rowid);
+  uint16_t new_rec_len = LEN_OF_HDR_LEN;
+  for (int i = 0; i < wctx->col_count; i++) {
+    if (values[i] != NULL)
+      new_rec_len += lengths[i];
+    uint32_t col_type = derive_col_type_or_len(types[i], values[i], lengths[i]);
+    new_rec_len += get_vlen_of_uint32(col_type);
+  }
+  uint16_t last_pos = check_space_for_new_row(wctx, page_size,
+      rec_count, len_of_rec_len_rowid, new_rec_len);
+
+  write_rec_len_rowid_hdr_len(wctx->buf + last_pos, new_rec_len, 
+                    wctx->cur_write_rowid, wctx->col_count + LEN_OF_HDR_LEN);
+  byte *rec_ptr = wctx->buf + last_pos + len_of_rec_len_rowid + LEN_OF_HDR_LEN;
+  for (int i = 0; i < wctx->col_count; i++) {
+    uint32_t col_type = derive_col_type_or_len(types[i], values[i], lengths[i]);
+    int8_t vint_len = write_vint32(rec_ptr, col_type);
+    rec_ptr += vint_len;
+  }
+  for (int i = 0; i < wctx->col_count; i++) {
+    if (values[i] != NULL)
+      rec_ptr += write_data(rec_ptr, types[i], values[i], lengths[i]);
+  }
+  write_uint16(ptr + 3, rec_count);
+  write_uint16(ptr + 5, last_pos);
+  write_uint16(ptr + 8 - 2 + (rec_count * 2), last_pos);
+  wctx->flush_flag = 0xA5;
+
+  return ULS_RES_OK;
+}
+
+// See .h file for API description
+int uls_append_row(struct uls_write_context *wctx) {
+
+  wctx->cur_write_rowid++;
+  byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
+  int rec_count = read_uint16(ptr + 3) + 1;
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
+  uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_vlen_of_uint32(wctx->cur_write_rowid);
+  uint16_t new_rec_len = wctx->col_count;
+  new_rec_len += LEN_OF_HDR_LEN;
+  uint16_t last_pos = check_space_for_new_row(wctx, page_size,
+      rec_count, len_of_rec_len_rowid, new_rec_len);
 
   memset(wctx->buf + last_pos, '\0', new_rec_len + len_of_rec_len_rowid);
   write_rec_len_rowid_hdr_len(wctx->buf + last_pos, new_rec_len, 
-                              wctx->cur_write_rowid, wctx->col_count + LEN_OF_HDR_LEN);
+                    wctx->cur_write_rowid, wctx->col_count + LEN_OF_HDR_LEN);
   write_uint16(ptr + 3, rec_count);
   write_uint16(ptr + 5, last_pos);
   write_uint16(ptr + 8 - 2 + (rec_count * 2), last_pos);
@@ -634,13 +736,15 @@ int uls_set_col_val(struct uls_write_context *wctx,
   if (rec_len + diff + 2 > page_size - wctx->page_resv_bytes)
     return ULS_RES_TOO_LONG;
   uint16_t new_last_pos = last_pos + cur_len - new_len - LEN_OF_HDR_LEN;
-  if (new_last_pos < (ptr - wctx->buf) + 9 + rec_count * 2) {
+  if (new_last_pos < (ptr - wctx->buf) + 9 + CHKSUM_LEN + rec_count * 2) {
     uint16_t prev_last_pos = read_uint16(ptr + 8 + (rec_count - 2) * 2);
     write_uint16(ptr + 3, rec_count - 1);
     write_uint16(ptr + 5, prev_last_pos);
+    saveChecksumBytes(ptr);
     int res = write_page(wctx, wctx->cur_write_page, page_size);
     if (res)
       return res;
+    restoreChecksumBytes(ptr);
     wctx->cur_write_page++;
     init_bt_tbl_leaf(wctx->buf);
     int8_t len_of_rowid;
@@ -663,33 +767,7 @@ int uls_set_col_val(struct uls_write_context *wctx,
   memmove(wctx->buf + new_last_pos, wctx->buf + last_pos,
           data_ptr - wctx->buf - last_pos);
   data_ptr -= diff;
-  if (type == ULS_TYPE_INT) {
-    switch (len) {
-      case 1:
-        write_uint8(data_ptr, *((int8_t *) val));
-        break;
-      case 2:
-        write_uint16(data_ptr, *((int16_t *) val));
-        break;
-      case 4:
-        write_uint32(data_ptr, *((int32_t *) val));
-        break;
-      case 8:
-        write_uint64(data_ptr, *((int64_t *) val));
-        break;
-    }
-  } else
-  if (type == ULS_TYPE_REAL && len == 4) {
-    // Assumes float is represented in IEEE-754 format
-    uint64_t bytes64 = float_to_double(val);
-    write_uint64(data_ptr, bytes64);
-  } else
-  if (type == ULS_TYPE_REAL && len == 8) {
-    // Assumes double is represented in IEEE-754 format
-    uint64_t bytes = *((uint64_t *) val);
-    write_uint64(data_ptr, bytes);
-  } else
-    memcpy(data_ptr, val, len);
+  write_data(data_ptr, type, val, len);
 
   // make (or reduce) space and copy len
   uint32_t new_type_or_len = derive_col_type_or_len(type, val, new_len);
@@ -735,20 +813,17 @@ int uls_flush(struct uls_write_context *wctx) {
 }
 
 // See .h file for API description
-int uls_finalize(struct uls_write_context *wctx) {
-
+int uls_partial_finalize(struct uls_write_context *wctx) {
   int32_t page_size = get_pagesize(wctx->page_size_exp);
   if (wctx->flush_flag == 0xA5) {
     uls_flush(wctx);
     wctx->flush_flag = 0xA5;
   }
-
   int res = read_bytes_wctx(wctx, wctx->buf, 0, page_size);
   if (res)
     return res;
   if (memcmp(wctx->buf, sqlite_sig, 16) == 0)
     return ULS_RES_OK;
-
   // There was a flush just now, so update the last page in first page
   if (wctx->flush_flag == 0xA5) {
     write_uint32(wctx->buf + 60, wctx->cur_write_page);
@@ -756,7 +831,17 @@ int uls_finalize(struct uls_write_context *wctx) {
     if (res)
       return res;
   }
+  return ULS_RES_OK;
+}
 
+// See .h file for API description
+int uls_finalize(struct uls_write_context *wctx) {
+
+  int res = uls_partial_finalize(wctx);
+  if (res)
+    return res;
+
+  int32_t page_size = get_pagesize(wctx->page_size_exp);
   uint32_t next_level_cur_pos = wctx->cur_write_page + 1;
   uint32_t next_level_begin_pos = next_level_cur_pos;
   uint32_t cur_level_pos = 1;
@@ -846,7 +931,7 @@ int uls_init_for_append(struct uls_write_context *wctx) {
   res = read_bytes_wctx(wctx, wctx->buf, wctx->cur_write_page * page_size, page_size);
   if (res)
     return res;
-  res = uls_append_new_row(wctx);
+  res = uls_append_row(wctx);
   if (res)
     return res;
   return ULS_RES_OK;
@@ -1122,6 +1207,7 @@ int compare_bin(const byte *v1, byte len1, const byte *v2, byte len2) {
   return (len1 < len2 ? -k : k);
 }
 
+// Converts any type of integer to int64 for comparison
 int64_t convert_to_i64(byte *val, int len, byte is_big_endian) {
   int64_t ival_at = 0;
   switch (len) {

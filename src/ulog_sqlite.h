@@ -1,8 +1,8 @@
 /*
   Sqlite Micro Logger
 
-  Fast, Lean and Mean Sqlite database logger targetting
-  low memory systems such as Microcontrollers.
+  Fast and Lean Sqlite database logger targetting
+  low RAM systems such as Microcontrollers.
 
   This Library can work on systems that have as little as 2kb,
   such as the ATMega328 MCU.  It is available for the Arduino platform.
@@ -88,12 +88,12 @@ int uls_init_for_append(struct uls_write_context *wctx);
 // Creates new record with all columns null
 // If no more space in page, writes it to disk
 // creates new page, and creates a new record
-int uls_append_new_row(struct uls_write_context *wctx);
+int uls_append_row(struct uls_write_context *wctx);
 
 // Creates new record with given column values
 // If no more space in page, writes it to disk
 // creates new page, and creates a new record
-int uls_append_new_row_with_values(struct uls_write_context *wctx,
+int uls_append_row_with_values(struct uls_write_context *wctx,
       uint8_t types[], const void *values[], uint16_t lengths[]);
 
 // Sets value of column in the current record for the given column index
@@ -112,6 +112,10 @@ const void *uls_get_col_val(struct uls_write_context *wctx, int col_idx, uint32_
 // If it needs to be written for each record or column,
 // this can be used
 int uls_flush(struct uls_write_context *wctx);
+
+// Updates the last leaf page in the first page to enable
+// Binary Search
+int uls_partial_finalize(struct uls_write_context *wctx);
 
 // Based on the data written so far, forms Interior B-Tree pages
 // according to SQLite format and update the root page number
