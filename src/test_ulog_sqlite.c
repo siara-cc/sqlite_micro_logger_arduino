@@ -37,47 +37,92 @@
 #include <sys/time.h>
 #include <time.h>
 
-int fd;
+//int fd;
+FILE *fp;
+
+// int32_t read_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
+//   if (lseek(fd, pos, SEEK_SET) == -1) {
+//     ctx->err_no = errno;
+//     return ULS_RES_SEEK_ERR;
+//   }
+//   ssize_t ret = read(fd, buf, len);
+//   if (ret == -1) {
+//     ctx->err_no = errno;
+//     return ULS_RES_READ_ERR;
+//   }
+//   return ret;
+// }
+
+// int32_t read_fn_rctx(struct uls_read_context *ctx, void *buf, uint32_t pos, size_t len) {
+//   if (lseek(fd, pos, SEEK_SET) == -1)
+//     return ULS_RES_SEEK_ERR;
+//   ssize_t ret = read(fd, buf, len);
+//   if (ret == -1)
+//     return ULS_RES_READ_ERR;
+//   return ret;
+// }
+
+// int32_t write_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
+//   if (lseek(fd, pos, SEEK_SET) == -1) {
+//     ctx->err_no = errno;
+//     return ULS_RES_SEEK_ERR;
+//   }
+//   ssize_t ret = write(fd, buf, len);
+//   if (ret == -1) {
+//     ctx->err_no = errno;
+//     return ULS_RES_WRITE_ERR;
+//   }
+//   return ret;
+// }
+
+// int flush_fn(struct uls_write_context *ctx) {
+//   int ret = fsync(fd);
+//   if (ret == -1) {
+//     ctx->err_no = errno;
+//     return ULS_RES_FLUSH_ERR;
+//   }
+//   return ULS_RES_OK;
+// }
 
 int32_t read_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
-  if (lseek(fd, pos, SEEK_SET) == -1) {
-    ctx->err_no = errno;
+  if (fseek(fp, pos, SEEK_SET)) {
+    ctx->err_no = ferror(fp);
     return ULS_RES_SEEK_ERR;
   }
-  ssize_t ret = read(fd, buf, len);
-  if (ret == -1) {
-    ctx->err_no = errno;
+  size_t ret = fread(buf, 1, len, fp);
+  if (ret != len) {
+    ctx->err_no = ferror(fp);
     return ULS_RES_READ_ERR;
   }
   return ret;
 }
 
 int32_t read_fn_rctx(struct uls_read_context *ctx, void *buf, uint32_t pos, size_t len) {
-  if (lseek(fd, pos, SEEK_SET) == -1)
+  if (fseek(fp, pos, SEEK_SET))
     return ULS_RES_SEEK_ERR;
-  ssize_t ret = read(fd, buf, len);
-  if (ret == -1)
+  size_t ret = fread(buf, 1, len, fp);
+  if (ret != len)
     return ULS_RES_READ_ERR;
   return ret;
 }
 
 int32_t write_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
-  if (lseek(fd, pos, SEEK_SET) == -1) {
-    ctx->err_no = errno;
+  if (fseek(fp, pos, SEEK_SET)) {
+    ctx->err_no = ferror(fp);
     return ULS_RES_SEEK_ERR;
   }
-  ssize_t ret = write(fd, buf, len);
-  if (ret == -1) {
-    ctx->err_no = errno;
+  size_t ret = fwrite(buf, 1, len, fp);
+  if (ret != len) {
+    ctx->err_no = ferror(fp);
     return ULS_RES_WRITE_ERR;
   }
   return ret;
 }
 
 int flush_fn(struct uls_write_context *ctx) {
-  int ret = fsync(fd);
-  if (ret == -1) {
-    ctx->err_no = errno;
+  int ret = fflush(fp);
+  if (ret) {
+    ctx->err_no = ferror(fp);
     return ULS_RES_FLUSH_ERR;
   }
   return ULS_RES_OK;
@@ -98,12 +143,25 @@ int test_multilevel(char *filename) {
   ctx.write_fn = write_fn;
 
   unlink(filename);
-  fd = open(filename, O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  //fd = open(filename, O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  fp = fopen(filename, "w+b");
+  if (fp == NULL) {
+    perror ("Open Error:");
+    return -1;
+  }
 
-  char txt[24];
   struct tm *t;
   struct timeval tv;
   uls_write_init(&ctx);
+
+  int32_t ival;
+  double d1, d2;
+  char txt[24];
+  char txt1[11];
+  uint8_t types[] = {ULS_TYPE_TEXT, ULS_TYPE_INT, ULS_TYPE_REAL, ULS_TYPE_REAL, ULS_TYPE_TEXT};
+  void *values[] = {txt, &ival, &d1, &d2, txt1};
+  uint16_t lengths[] = {23, sizeof(ival), sizeof(d1), sizeof(d2), 0};
+
   int32_t max_rows = 1000000;
   for (int32_t i = 0; i < max_rows; i++) {
     gettimeofday(&tv, NULL);
@@ -133,18 +191,15 @@ int test_multilevel(char *filename) {
     txt[20] = '0' + (tv.tv_usec / 100000) % 10;
     txt[21] = '0' + (tv.tv_usec / 10000) % 10;
     txt[22] = '0' + (tv.tv_usec / 1000) % 10;
-    int32_t ival = i - max_rows / 2;
-    double d1 = i;
+    ival = i - max_rows / 2;
+    d1 = i;
     d1 /= 2;
-    double d2 = rand();
+    d2 = rand();
     d2 /= 1000;
     int txt_len = rand() % 10;
-    char txt1[11];
-    for (int j = 0; j < txt_len; j++)
-      txt1[j] = 'a' + (char)(rand() % 26);
-    uint8_t types[] = {ULS_TYPE_TEXT, ULS_TYPE_INT, ULS_TYPE_REAL, ULS_TYPE_REAL, ULS_TYPE_TEXT};
-    void *values[] = {txt, &ival, &d1, &d2, txt1};
-    uint16_t lengths[] = {23, sizeof(ival), sizeof(d1), sizeof(d2), txt_len};
+    lengths[4] = txt_len;
+    while (txt_len--)
+      txt1[txt_len] = 'a' + (char)(rand() % 26);
     uls_append_row_with_values(&ctx, types, (const void **) values, lengths);
   }
   if (uls_finalize(&ctx)) {
@@ -152,7 +207,7 @@ int test_multilevel(char *filename) {
     return -6;
   }
 
-  close(fd);
+  fclose(fp);
 
   return 0;
 
@@ -172,7 +227,12 @@ int test_basic(char *filename) {
   ctx.write_fn = write_fn;
 
   unlink(filename);
-  fd = open(filename, O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  //fd = open(filename, O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  fp = fopen(filename, "w+b");
+  if (fp == NULL) {
+    perror ("Open Error:");
+    return -1;
+  }
 
   uls_write_init(&ctx);
   uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, "Hello", 5);
@@ -190,7 +250,8 @@ int test_basic(char *filename) {
     printf("Error during finalize\n");
     return -6;
   }
-  close(fd);
+
+  fclose(fp);
 
   return 0;
 
@@ -319,16 +380,23 @@ int create_db(int argc, char *argv[]) {
   ctx.flush_fn = flush_fn;
   ctx.write_fn = write_fn;
   unlink(argv[2]);
-  fd = open(argv[2], O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
-  if (fd == -1) {
-    perror("Error");
-    return -2;
+  //fd = open(argv[2], O_CREAT | O_EXCL | O_TRUNC | O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  //if (fd == -1) {
+  //  perror("Error");
+  //  return -2;
+  //}
+  fp = fopen(argv[2], "w+b");
+  if (fp == NULL) {
+    perror ("Open Error:");
+    return -1;
   }
   if (uls_write_init(&ctx)) {
     printf("Error during init\n");
     return -3;
   }
-  return append_records(argc, argv, &ctx);
+  int ret = append_records(argc, argv, &ctx);
+  fclose(fp);
+  return ret;
 }
 
 int append_db(int argc, char *argv[]) {
@@ -349,16 +417,23 @@ int append_db(int argc, char *argv[]) {
   ctx.read_fn = read_fn;
   ctx.flush_fn = flush_fn;
   ctx.write_fn = write_fn;
-  fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
-  if (fd == -1) {
-    perror("Error");
-    return -2;
+  //fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  //if (fd == -1) {
+  //  perror("Error");
+  //  return -2;
+  //}
+  fp = fopen(argv[2], "w+b");
+  if (fp == NULL) {
+    perror ("Open Error:");
+    return -1;
   }
   if (uls_init_for_append(&ctx)) {
     printf("Error during init\n");
     return -3;
   }
-  return append_records(argc, argv, &ctx);
+  int ret = append_records(argc, argv, &ctx);
+  fclose(fp);
+  return ret;
 }
 
 int16_t read_int16(const byte *ptr) {
@@ -489,10 +564,15 @@ int bin_srch_db(int argc, char *argv[]) {
   struct uls_read_context ctx;
   ctx.buf = buf;
   ctx.read_fn = read_fn_rctx;
-  fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
-  if (fd == -1) {
-    perror("Error");
-    return -2;
+  //fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  //if (fd == -1) {
+  //  perror("Error");
+  //  return -2;
+  //}
+  fp = fopen(argv[2], "r+b");
+  if (fp == NULL) {
+    perror ("Open Error:");
+    return -1;
   }
   if (uls_read_init(&ctx)) {
     printf("Error during init\n");
@@ -511,6 +591,7 @@ int bin_srch_db(int argc, char *argv[]) {
     display_row(ctx);
   }
   putchar('\n');
+  fclose(fp);
   return 0;
 }
 
@@ -519,10 +600,15 @@ int read_db(int argc, char *argv[]) {
   struct uls_read_context ctx;
   ctx.buf = buf;
   ctx.read_fn = read_fn_rctx;
-  fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
-  if (fd == -1) {
-    perror("Error");
-    return -2;
+  //fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  //if (fd == -1) {
+  //  perror("Error");
+  //  return -2;
+  //}
+  fp = fopen(argv[2], "r+b");
+  if (fp == NULL) {
+    perror ("Open Error:");
+    return -1;
   }
   if (uls_read_init(&ctx)) {
     printf("Error during init\n");
@@ -537,6 +623,7 @@ int read_db(int argc, char *argv[]) {
     display_row(ctx);
   }
   putchar('\n');
+  fclose(fp);
   return 0;
 }
 
