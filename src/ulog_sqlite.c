@@ -187,7 +187,7 @@ int32_t get_pagesize(byte page_size_exp) {
 uint16_t acquire_last_pos(struct uls_write_context *wctx, byte *ptr) {
   uint16_t last_pos = read_uint16(ptr + 5);
   if (last_pos == 0) {
-    uls_append_row(wctx);
+    uls_append_empty_row(wctx);
     last_pos = read_uint16(ptr + 5);
   }
   return last_pos;
@@ -482,7 +482,7 @@ int form_page1(struct uls_write_context *wctx, char *table_name, char *table_scr
   int orig_col_count = wctx->col_count;
   wctx->cur_write_page = 0;
   wctx->col_count = 5;
-  uls_append_row(wctx);
+  uls_append_empty_row(wctx);
   uls_set_col_val(wctx, 0, ULS_TYPE_TEXT, "table", 5);
   if (table_name == NULL)
     table_name = default_table_name;
@@ -596,23 +596,23 @@ int uls_write_init(struct uls_write_context *wctx) {
 // Checks space for appending new row
 // If space not available, writes current buffer to disk and
 // initializes buffer as new page
-uint16_t check_space_for_new_row(struct uls_write_context *wctx, int32_t page_size,
-           int rec_count, uint16_t len_of_rec_len_rowid, uint16_t new_rec_len) {
+uint16_t make_space_for_new_row(struct uls_write_context *wctx, int32_t page_size,
+           uint16_t len_of_rec_len_rowid, uint16_t new_rec_len) {
   byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
   uint16_t last_pos = read_uint16(ptr + 5);
+  int rec_count = read_uint16(ptr + 3) + 1;
   if (last_pos == 0)
     last_pos = page_size - wctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
   else {
     last_pos -= new_rec_len;
     last_pos -= len_of_rec_len_rowid;
-    if (last_pos < (ptr - wctx->buf) + 9 + CHKSUM_LEN + rec_count * 2) {
+    if (last_pos < ((ptr - wctx->buf) + 9 + CHKSUM_LEN + (rec_count * 2))) {
       int res = write_page(wctx, wctx->cur_write_page, page_size);
       if (res)
         return res;
       wctx->cur_write_page++;
       init_bt_tbl_leaf(wctx->buf);
       last_pos = page_size - wctx->page_resv_bytes - new_rec_len - len_of_rec_len_rowid;
-      rec_count = 1;
     }
   }
   return last_pos;
@@ -657,21 +657,23 @@ int uls_append_row_with_values(struct uls_write_context *wctx,
 
   wctx->cur_write_rowid++;
   byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
-  int rec_count = read_uint16(ptr + 3) + 1;
   int32_t page_size = get_pagesize(wctx->page_size_exp);
   uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_vlen_of_uint32(wctx->cur_write_rowid);
-  uint16_t new_rec_len = LEN_OF_HDR_LEN;
+  uint16_t new_rec_len = 0;
+  uint16_t hdr_len = LEN_OF_HDR_LEN;
   for (int i = 0; i < wctx->col_count; i++) {
     if (values[i] != NULL)
-      new_rec_len += lengths[i];
+      new_rec_len += (types[i] == ULS_TYPE_REAL ? 8 : lengths[i]);
     uint32_t col_type = derive_col_type_or_len(types[i], values[i], lengths[i]);
-    new_rec_len += get_vlen_of_uint32(col_type);
+    hdr_len += get_vlen_of_uint32(col_type);
   }
-  uint16_t last_pos = check_space_for_new_row(wctx, page_size,
-      rec_count, len_of_rec_len_rowid, new_rec_len);
+  new_rec_len += hdr_len;
+  uint16_t last_pos = make_space_for_new_row(wctx, page_size,
+                        len_of_rec_len_rowid, new_rec_len);
+  int rec_count = read_uint16(ptr + 3) + 1;
 
   write_rec_len_rowid_hdr_len(wctx->buf + last_pos, new_rec_len, 
-                    wctx->cur_write_rowid, wctx->col_count + LEN_OF_HDR_LEN);
+                    wctx->cur_write_rowid, hdr_len);
   byte *rec_ptr = wctx->buf + last_pos + len_of_rec_len_rowid + LEN_OF_HDR_LEN;
   for (int i = 0; i < wctx->col_count; i++) {
     uint32_t col_type = derive_col_type_or_len(types[i], values[i], lengths[i]);
@@ -691,17 +693,17 @@ int uls_append_row_with_values(struct uls_write_context *wctx,
 }
 
 // See .h file for API description
-int uls_append_row(struct uls_write_context *wctx) {
+int uls_append_empty_row(struct uls_write_context *wctx) {
 
   wctx->cur_write_rowid++;
   byte *ptr = wctx->buf + (wctx->buf[0] == 13 ? 0 : 100);
-  int rec_count = read_uint16(ptr + 3) + 1;
   int32_t page_size = get_pagesize(wctx->page_size_exp);
   uint16_t len_of_rec_len_rowid = LEN_OF_REC_LEN + get_vlen_of_uint32(wctx->cur_write_rowid);
   uint16_t new_rec_len = wctx->col_count;
   new_rec_len += LEN_OF_HDR_LEN;
-  uint16_t last_pos = check_space_for_new_row(wctx, page_size,
-      rec_count, len_of_rec_len_rowid, new_rec_len);
+  uint16_t last_pos = make_space_for_new_row(wctx, page_size,
+                        len_of_rec_len_rowid, new_rec_len);
+  int rec_count = read_uint16(ptr + 3) + 1;
 
   memset(wctx->buf + last_pos, '\0', new_rec_len + len_of_rec_len_rowid);
   write_rec_len_rowid_hdr_len(wctx->buf + last_pos, new_rec_len, 
@@ -931,7 +933,7 @@ int uls_init_for_append(struct uls_write_context *wctx) {
   res = read_bytes_wctx(wctx, wctx->buf, wctx->cur_write_page * page_size, page_size);
   if (res)
     return res;
-  res = uls_append_row(wctx);
+  res = uls_append_empty_row(wctx);
   if (res)
     return res;
   return ULS_RES_OK;

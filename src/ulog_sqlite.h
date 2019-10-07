@@ -88,7 +88,7 @@ int uls_init_for_append(struct uls_write_context *wctx);
 // Creates new record with all columns null
 // If no more space in page, writes it to disk
 // creates new page, and creates a new record
-int uls_append_row(struct uls_write_context *wctx);
+int uls_append_empty_row(struct uls_write_context *wctx);
 
 // Creates new record with given column values
 // If no more space in page, writes it to disk

@@ -142,17 +142,10 @@ int test_multilevel(char *filename) {
     char txt1[11];
     for (int j = 0; j < txt_len; j++)
       txt1[j] = 'a' + (char)(rand() % 26);
-    /*uint8_t types[] = {ULS_TYPE_TEXT, ULS_TYPE_INT, ULS_TYPE_REAL, ULS_TYPE_REAL, ULS_TYPE_TEXT};
+    uint8_t types[] = {ULS_TYPE_TEXT, ULS_TYPE_INT, ULS_TYPE_REAL, ULS_TYPE_REAL, ULS_TYPE_TEXT};
     void *values[] = {txt, &ival, &d1, &d2, txt1};
     uint16_t lengths[] = {23, sizeof(ival), sizeof(d1), sizeof(d2), txt_len};
-    uls_append_row_with_values(&ctx, types, (const void **) values, lengths);*/
-    uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, txt, 23);
-    uls_set_col_val(&ctx, 1, ULS_TYPE_INT, &ival, sizeof(ival));
-    uls_set_col_val(&ctx, 2, ULS_TYPE_REAL, &d1, sizeof(d1));
-    uls_set_col_val(&ctx, 3, ULS_TYPE_REAL, &d2, sizeof(d2));
-    uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, txt, txt_len);
-    if (i < max_rows - 1)
-      uls_append_row(&ctx);
+    uls_append_row_with_values(&ctx, types, (const void **) values, lengths);
   }
   if (uls_finalize(&ctx)) {
     printf("Error during finalize\n");
@@ -187,7 +180,7 @@ int test_basic(char *filename) {
   uls_set_col_val(&ctx, 2, ULS_TYPE_TEXT, "How", 3);
   uls_set_col_val(&ctx, 3, ULS_TYPE_TEXT, "Are", 3);
   uls_set_col_val(&ctx, 4, ULS_TYPE_TEXT, "You", 3);
-  uls_append_row(&ctx);
+  uls_append_empty_row(&ctx);
   uls_set_col_val(&ctx, 0, ULS_TYPE_TEXT, "I", 1);
   uls_set_col_val(&ctx, 1, ULS_TYPE_TEXT, "am", 2);
   uls_set_col_val(&ctx, 2, ULS_TYPE_TEXT, "fine", 4);
@@ -294,7 +287,7 @@ int append_records(int argc, char *argv[], struct uls_write_context *ctx) {
       return -4;
     }
     if (i < argc - 1) {
-      if (uls_append_row(ctx)) {
+      if (uls_append_empty_row(ctx)) {
         printf("Error during add col\n");
         return -5;
       }

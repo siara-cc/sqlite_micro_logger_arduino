@@ -29,7 +29,7 @@ File myFile;
 
 #define SD_CS_PIN 8
 
-int32_t read_fn(struct uls_write_context *ctx, void *buf, long pos, size_t len) {
+int32_t read_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
   myFile.seek(pos);
   size_t ret = myFile.read((byte *)buf, len);
   if (ret != len)
@@ -37,7 +37,7 @@ int32_t read_fn(struct uls_write_context *ctx, void *buf, long pos, size_t len) 
   return ret;
 }
 
-int32_t write_fn(struct uls_write_context *ctx, void *buf, long pos, size_t len) {
+int32_t write_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
   myFile.seek(pos);
   size_t ret = myFile.write((byte *)buf, len);
   if (ret != len)
@@ -147,7 +147,7 @@ void loop() {
             break;
         }
         if (num_entries) {
-          res = uls_append_row(&ctx);
+          res = uls_append_empty_row(&ctx);
           if (res)
             break;
           delay(dly);
