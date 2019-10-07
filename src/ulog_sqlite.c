@@ -1,8 +1,3 @@
-- header checksum always checked
-- no. of records always less than last pos
-- optional to write and check page checksum
-- record length should not exceed remaining page size
-- column length should not exceed remaining record size
 /*
   Sqlite Micro Logger
 
@@ -27,6 +22,11 @@
   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
   See the License for the specific language governing permissions and
   limitations under the License.
+- header checksum always checked
+- no. of records always less than last pos
+- optional to write and check page checksum
+- record length should not exceed remaining page size
+- column length should not exceed remaining record size
 */
 
 #include "ulog_sqlite.h"

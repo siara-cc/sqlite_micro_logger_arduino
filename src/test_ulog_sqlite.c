@@ -152,7 +152,7 @@ int test_multilevel(char *filename) {
 
   struct tm *t;
   struct timeval tv;
-  uls_write_init_with_script(&ctx, "tbl_test_log",
+  uls_write_init_with_script(&ctx, "test_log",
    "CREATE TABLE test_log (date_time TEXT, int_seq INTEGER, float_seq REAL, float_rand REAL, text_rand TEXT)");
 
   int32_t ival;
@@ -432,7 +432,7 @@ int append_db(int argc, char *argv[]) {
   //  perror("Error");
   //  return -2;
   //}
-  fp = fopen(argv[2], "w+b");
+  fp = fopen(argv[2], "r+b");
   if (fp == NULL) {
     perror ("Open Error:");
     fclose(fp);
