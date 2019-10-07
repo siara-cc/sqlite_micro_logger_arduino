@@ -64,7 +64,7 @@ struct uls_write_context {
   // following are running values used internally
   uint32_t cur_write_page;
   uint32_t cur_write_rowid;
-  byte flush_flag;
+  byte state;
   int err_no;
 };
 
@@ -113,8 +113,8 @@ const void *uls_get_col_val(struct uls_write_context *wctx, int col_idx, uint32_
 // this can be used
 int uls_flush(struct uls_write_context *wctx);
 
-// Updates the last leaf page in the first page to enable
-// Binary Search
+// Flushes data written so far and Updates the last leaf page number
+// in the first page to enable Binary Search
 int uls_partial_finalize(struct uls_write_context *wctx);
 
 // Based on the data written so far, forms Interior B-Tree pages
@@ -124,6 +124,13 @@ int uls_finalize(struct uls_write_context *wctx);
 
 // Returns 1 if the database is in unfinalized state
 int uls_not_finalized(struct uls_write_context *wctx);
+
+// Reads page size from database if not known
+int32_t uls_read_page_size(struct uls_write_context *wctx);
+
+// Recovers database pointed by given context
+// and finalizes it
+int uls_recover(struct uls_write_context *wctx);
 
 // Read context to be passed to read from a database created using this library.
 // The running values need not be supplied

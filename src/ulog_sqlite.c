@@ -1,3 +1,8 @@
+- header checksum always checked
+- no. of records always less than last pos
+- optional to write and check page checksum
+- record length should not exceed remaining page size
+- column length should not exceed remaining record size
 /*
   Sqlite Micro Logger
 
@@ -33,6 +38,9 @@
 #define LEN_OF_REC_LEN 3
 #define LEN_OF_HDR_LEN 2
 #define CHKSUM_LEN 3
+
+enum {ULS_ST_NOT_FINAL = 0xA4, ULS_ST_WRITE_PENDING, 
+          ULS_ST_WRITING_IDX, ULS_ST_FINAL};
 
 // Returns how many bytes the given integer will
 // occupy if stored as a variable integer
@@ -687,7 +695,7 @@ int uls_append_row_with_values(struct uls_write_context *wctx,
   write_uint16(ptr + 3, rec_count);
   write_uint16(ptr + 5, last_pos);
   write_uint16(ptr + 8 - 2 + (rec_count * 2), last_pos);
-  wctx->flush_flag = 0xA5;
+  wctx->state = ULS_ST_WRITE_PENDING;
 
   return ULS_RES_OK;
 }
@@ -711,7 +719,7 @@ int uls_append_empty_row(struct uls_write_context *wctx) {
   write_uint16(ptr + 3, rec_count);
   write_uint16(ptr + 5, last_pos);
   write_uint16(ptr + 8 - 2 + (rec_count * 2), last_pos);
-  wctx->flush_flag = 0xA5;
+  wctx->state = ULS_ST_WRITE_PENDING;
 
   return ULS_RES_OK;
 }
@@ -788,7 +796,7 @@ int uls_set_col_val(struct uls_write_context *wctx,
   write_uint16(ptr + 5, new_last_pos);
   rec_count--;
   write_uint16(ptr + 8 + rec_count * 2, new_last_pos);
-  wctx->flush_flag = 0xA5;
+  wctx->state = ULS_ST_WRITE_PENDING;
 
   return ULS_RES_OK;
 }
@@ -810,28 +818,42 @@ int uls_flush(struct uls_write_context *wctx) {
     return res;
   int ret = wctx->flush_fn(wctx);
   if (!ret)
-    wctx->flush_flag = 0;
+    wctx->state = ULS_ST_NOT_FINAL;
   return ret;
 }
 
 // See .h file for API description
 int uls_partial_finalize(struct uls_write_context *wctx) {
   int32_t page_size = get_pagesize(wctx->page_size_exp);
-  if (wctx->flush_flag == 0xA5) {
+  if (wctx->state == ULS_ST_WRITE_PENDING) {
     uls_flush(wctx);
-    wctx->flush_flag = 0xA5;
+    wctx->state = ULS_ST_WRITE_PENDING;
   }
   int res = read_bytes_wctx(wctx, wctx->buf, 0, page_size);
   if (res)
     return res;
   if (memcmp(wctx->buf, sqlite_sig, 16) == 0)
     return ULS_RES_OK;
-  // There was a flush just now, so update the last page in first page
-  if (wctx->flush_flag == 0xA5) {
-    write_uint32(wctx->buf + 60, wctx->cur_write_page);
-    res = write_page(wctx, 0, page_size);
-    if (res)
-      return res;
+  uint32_t last_leaf_page = read_uint32(wctx->buf + 60);
+  // Update the last page no. in first page
+  if (last_leaf_page == 0) {
+    if (!wctx->cur_write_page) {
+      byte head_buf[8];
+      do {
+        res = read_bytes_wctx(wctx, head_buf, (wctx->cur_write_page + 1) * page_size, 8);
+        if (res)
+          break;
+        if (head_buf[0] == 13)
+          wctx->cur_write_page++;
+      } while (head_buf[0] == 13);
+    }
+    if (wctx->cur_write_page) {
+      write_uint32(wctx->buf + 60, wctx->cur_write_page);
+      res = write_page(wctx, 0, page_size);
+      if (res)
+        return res;
+    } else
+      return ULS_RES_MALFORMED;
   }
   return ULS_RES_OK;
 }
@@ -902,6 +924,31 @@ int uls_not_finalized(struct uls_write_context *wctx) {
   return ULS_RES_NOT_FINALIZED;
 }
 
+int32_t uls_read_page_size(struct uls_write_context *wctx) {
+  int res = read_bytes_wctx(wctx, wctx->buf, 0, 72);
+  if (res)
+    return res;
+  if (check_signature(wctx->buf))
+    return ULS_RES_INVALID_SIG;
+  int32_t page_size = read_uint16(wctx->buf + 16);
+  wctx->page_size_exp = get_page_size_exp(page_size);
+  if (!wctx->page_size_exp)
+    return ULS_RES_INVALID_SIG;
+  if (page_size == 1)
+    return 65536;
+  return page_size;
+}
+
+// See .h file for API description
+int uls_recover(struct uls_write_context *wctx) {
+  wctx->state = ULS_ST_NOT_FINAL;
+  wctx->cur_write_page = 0;
+  int res = uls_finalize(wctx);
+  if (res)
+    return res;
+  return ULS_RES_OK;
+}
+
 // See .h file for API description
 int uls_init_for_append(struct uls_write_context *wctx) {
   int res = read_bytes_wctx(wctx, wctx->buf, 0, 72);
@@ -918,7 +965,6 @@ int uls_init_for_append(struct uls_write_context *wctx) {
   res = read_bytes_wctx(wctx, wctx->buf, 0, page_size);
   if (res)
     return res;
-  wctx->flush_flag = 0;
   wctx->cur_write_page = read_uint32(wctx->buf + 60);
   if (wctx->cur_write_page == 0)
     return ULS_RES_NOT_FINALIZED;
@@ -933,9 +979,7 @@ int uls_init_for_append(struct uls_write_context *wctx) {
   res = read_bytes_wctx(wctx, wctx->buf, wctx->cur_write_page * page_size, page_size);
   if (res)
     return res;
-  res = uls_append_empty_row(wctx);
-  if (res)
-    return res;
+  wctx->state = ULS_ST_NOT_FINAL;
   return ULS_RES_OK;
 }
 

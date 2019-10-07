@@ -152,7 +152,8 @@ int test_multilevel(char *filename) {
 
   struct tm *t;
   struct timeval tv;
-  uls_write_init(&ctx);
+  uls_write_init_with_script(&ctx, "tbl_test_log",
+   "CREATE TABLE test_log (date_time TEXT, int_seq INTEGER, float_seq REAL, float_rand REAL, text_rand TEXT)");
 
   int32_t ival;
   double d1, d2;
@@ -204,6 +205,7 @@ int test_multilevel(char *filename) {
   }
   if (uls_finalize(&ctx)) {
     printf("Error during finalize\n");
+    fclose(fp);
     return -6;
   }
 
@@ -270,6 +272,8 @@ void print_usage() {
   printf("test_ulog_sqlite -a <db_name.db> <page_size> <col_count> <csv_1> ... <csv_n>\n");
   printf("    Appends to a Sqlite database created using -c above\n");
   printf("        with records in CSV format (page_size and col_count have to match)\n\n");
+  printf("test_ulog_sqlite -v <db_name.db>\n");
+  printf("    Attempts to recover <db_name.db> if not finalized\n\n");
   printf("test_ulog_sqlite -r <db_name.db> <rowid>\n");
   printf("    Searches <db_name.db> for given row_id and prints result\n\n");
   printf("test_ulog_sqlite -b <db_name.db> <col_idx> <value>\n");
@@ -311,6 +315,10 @@ int add_col(struct uls_write_context *ctx, int col_idx, char *data, byte isInt, 
 }
 
 int append_records(int argc, char *argv[], struct uls_write_context *ctx) {
+  if (uls_append_empty_row(ctx)) {
+    printf("Error during add row\n");
+    return -5;
+  }
   for (int i = 5; i < argc; i++) {
     char *col_data = argv[i];
     char *chr = col_data;
@@ -388,10 +396,12 @@ int create_db(int argc, char *argv[]) {
   fp = fopen(argv[2], "w+b");
   if (fp == NULL) {
     perror ("Open Error:");
+    fclose(fp);
     return -1;
   }
   if (uls_write_init(&ctx)) {
     printf("Error during init\n");
+    fclose(fp);
     return -3;
   }
   int ret = append_records(argc, argv, &ctx);
@@ -425,15 +435,51 @@ int append_db(int argc, char *argv[]) {
   fp = fopen(argv[2], "w+b");
   if (fp == NULL) {
     perror ("Open Error:");
+    fclose(fp);
     return -1;
   }
   if (uls_init_for_append(&ctx)) {
     printf("Error during init\n");
+    fclose(fp);
     return -3;
   }
   int ret = append_records(argc, argv, &ctx);
   fclose(fp);
   return ret;
+}
+
+int recover_db(int argc, char *argv[]) {
+  byte initial_buf[72];
+  struct uls_write_context ctx;
+  ctx.buf = initial_buf;
+  ctx.read_fn = read_fn;
+  ctx.flush_fn = flush_fn;
+  ctx.write_fn = write_fn;
+  //fd = open(argv[2], O_RDWR | O_SYNC, S_IRUSR | S_IWUSR);
+  //if (fd == -1) {
+  //  perror("Error");
+  //  return -2;
+  //}
+  fp = fopen(argv[2], "r+b");
+  if (fp == NULL) {
+    perror ("Open Error:");
+    return -1;
+  }
+  int32_t page_size = uls_read_page_size(&ctx);
+  if (page_size < 512) {
+    printf("Error reading page size\n");
+    fclose(fp);
+    return -2;
+  }
+  byte buf[page_size];
+  ctx.buf = buf;
+  if (uls_recover(&ctx)) {
+    printf("Error during recover\n");
+    fclose(fp);
+    return -3;
+  }
+  fclose(fp);
+  return 0;
 }
 
 int16_t read_int16(const byte *ptr) {
@@ -576,6 +622,7 @@ int bin_srch_db(int argc, char *argv[]) {
   }
   if (uls_read_init(&ctx)) {
     printf("Error during init\n");
+    fclose(fp);
     return -3;
   }
   byte page_buf[1 << (ctx.page_size_exp == 1 ? 16 : ctx.page_size_exp)];
@@ -612,6 +659,7 @@ int read_db(int argc, char *argv[]) {
   }
   if (uls_read_init(&ctx)) {
     printf("Error during init\n");
+    fclose(fp);
     return -3;
   }
   byte page_buf[1 << (ctx.page_size_exp == 1 ? 16 : ctx.page_size_exp)];
@@ -634,6 +682,9 @@ int main(int argc, char *argv[]) {
   } else
   if (argc > 4 && strcmp(argv[1], "-a") == 0) {
     append_db(argc, argv);
+  } else
+  if (argc == 3 && strcmp(argv[1], "-v") == 0) {
+    recover_db(argc, argv);
   } else
   if (argc == 4 && strcmp(argv[1], "-r") == 0) {
     read_db(argc, argv);
