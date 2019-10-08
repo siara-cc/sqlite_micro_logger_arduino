@@ -29,25 +29,25 @@ File myFile;
 
 #define SD_CS_PIN 8
 
-int32_t read_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
+int32_t read_fn(struct dblog_write_context *ctx, void *buf, uint32_t pos, size_t len) {
   myFile.seek(pos);
   size_t ret = myFile.read((byte *)buf, len);
   if (ret != len)
-    return ULS_RES_READ_ERR;
+    return DBLOG_RES_READ_ERR;
   return ret;
 }
 
-int32_t write_fn(struct uls_write_context *ctx, void *buf, uint32_t pos, size_t len) {
+int32_t write_fn(struct dblog_write_context *ctx, void *buf, uint32_t pos, size_t len) {
   myFile.seek(pos);
   size_t ret = myFile.write((byte *)buf, len);
   if (ret != len)
-    return ULS_RES_ERR;
+    return DBLOG_RES_ERR;
   return ret;
 }
 
-int flush_fn(struct uls_write_context *ctx) {
+int flush_fn(struct dblog_write_context *ctx) {
   myFile.flush();
-  return ULS_RES_OK;
+  return DBLOG_RES_OK;
 }
 
 int input_string(char *str, int max_len) {
@@ -129,7 +129,7 @@ void loop() {
 
   // if the file opened okay, write to it:
   if (myFile) {
-    struct uls_write_context ctx;
+    struct dblog_write_context ctx;
     ctx.buf = buf;
     ctx.col_count = 6;
     ctx.page_size_exp = 9;
@@ -137,17 +137,17 @@ void loop() {
     ctx.read_fn = read_fn;
     ctx.flush_fn = flush_fn;
     ctx.write_fn = write_fn;
-    int res = uls_write_init(&ctx);
+    int res = dblog_write_init(&ctx);
     if (!res) {
       while (num_entries--) {
         for (int i = 0; i < 6; i++) {
           int val = analogRead(A0 + i);
-          res = uls_set_col_val(&ctx, i, ULS_TYPE_INT, &val, sizeof(int));
+          res = dblog_set_col_val(&ctx, i, DBLOG_TYPE_INT, &val, sizeof(int));
           if (res)
             break;
         }
         if (num_entries) {
-          res = uls_append_empty_row(&ctx);
+          res = dblog_append_empty_row(&ctx);
           if (res)
             break;
           delay(dly);
@@ -155,7 +155,7 @@ void loop() {
       }
     }
     if (!res)
-      res = uls_finalize(&ctx);
+      res = dblog_finalize(&ctx);
     myFile.close();
     if (res) {
       Serial.print(F("Err:"));

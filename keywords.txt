@@ -1,0 +1,46 @@
+#######################################
+# Syntax Coloring Map
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+dblog_write_context	KEYWORD1
+dblog_read_context	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+dblog_write_init	KEYWORD2
+dblog_write_init_with_script	KEYWORD2
+dblog_init_for_append	KEYWORD2
+dblog_append_empty_row	KEYWORD2
+dblog_append_row_with_values	KEYWORD2
+dblog_set_col_val	KEYWORD2
+dblog_get_col_val	KEYWORD2
+dblog_flush	KEYWORD2
+dblog_partial_finalize	KEYWORD2
+dblog_finalize	KEYWORD2
+dblog_not_finalized	KEYWORD2
+dblog_read_page_size	KEYWORD2
+dblog_recover	KEYWORD2
+
+dblog_read_init	KEYWORD2
+dblog_cur_row_col_count	KEYWORD2
+dblog_read_col_val	KEYWORD2
+dblog_derive_data_len	KEYWORD2
+dblog_read_first_row	KEYWORD2
+dblog_read_next_row	KEYWORD2
+dblog_read_prev_row	KEYWORD2
+dblog_read_last_row	KEYWORD2
+dblog_srch_row_by_id	KEYWORD2
+dblog_bin_srch_row_by_val	KEYWORD2
+
+######################################
+# Constants (LITERAL1)
+#######################################
+DBLOG_TYPE_INT	LITERAL1
+DBLOG_TYPE_REAL	LITERAL1
+DBLOG_TYPE_BLOB	LITERAL1
+DBLOG_TYPE_TEXT	LITERAL1
