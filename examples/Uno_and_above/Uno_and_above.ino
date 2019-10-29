@@ -266,7 +266,7 @@ void inputDBName() {
   input_string(filename, sizeof(filename));
 }
 
-int inputTimestamp(char *datetime) {
+int input_ts(char *datetime) {
   Serial.print(F("\nEnter timestamp (YYYY-MM-DD HH:MM:SS.SSS): "));
   return input_string(datetime, 23);
 }
@@ -293,9 +293,9 @@ void loop() {
       num_entries = input_num();
       Serial.print(F("\nNumber of analog pins (from A0): "));
       int8_t analog_pin_count = input_num();
-      Serial.print(F("\nCurrent time (YYYY-MM-DD HH:MM:SS.SSS): "));
+      Serial.print(F("\nCurrent time (YYYY-MM-DD HH:MM:SS.000): "));
       char ts[24];
-      if (input_string(ts, 23) < 23) {
+      if (input_ts(ts) < 23) {
         Serial.print(F("Input full timestamp\n"));
         return;
       }
@@ -400,7 +400,7 @@ void loop() {
           Serial.print(F("\nEnter RowID (1 to 32767 on UNO): "));
           uint32_t rowid = input_num();
         } else
-          dt_len = inputTimestamp(srch_datetime);
+          dt_len = input_ts(srch_datetime);
         Serial.print(F("No. of records to display: "));
         num_entries = input_num();
         unsigned long start = millis();
