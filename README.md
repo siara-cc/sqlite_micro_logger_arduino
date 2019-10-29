@@ -1,4 +1,4 @@
-# sqlite_micro_logger
+# Sqlite µLogger
 
 Lean and Mean Sqlite Data(base) Logger
 
