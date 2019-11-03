@@ -261,7 +261,9 @@ void log_analog_data() {
   input_db_name();
   Serial.print(F("\nRecord count (1 to 32767 on UNO): "));
   num_entries = input_num();
-  Serial.print(F("\nNumber of analog pins (from A0): "));
+  Serial.print(F("\nStarting analog pin (14=A0 on Uno): "));
+  int8_t analog_pin_start = input_num();
+  Serial.print(F("\nNo. of pins: "));
   int8_t analog_pin_count = input_num();
   char ts[24];
   if (input_ts(ts) < 23) {
@@ -296,7 +298,7 @@ void log_analog_data() {
         update_ts(ts, (int) (millis() - last_ms));
         last_ms = millis();
         for (int8_t i = 0; i < analog_pin_count; i++) {
-          int val = analogRead(A0 + i);
+          int val = analogRead(analog_pin_start + i);
           res = dblog_set_col_val(&ctx, i + 1, DBLOG_TYPE_INT, &val, sizeof(int));
           if (res)
             break;

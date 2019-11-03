@@ -33,9 +33,8 @@
 #define MAX_STR_LEN 500
 
 // If you would like to read DBs created with this repo
-// with page size more than 512, change here,
+// with page size more than 4096, change here,
 // but ensure as much SRAM can be allocated.
-// Please Arduino Uno cannot support page size > 512.
 #define BUF_SIZE 4096
 byte buf[BUF_SIZE];
 char filename[MAX_FILE_NAME_LEN];
@@ -69,11 +68,11 @@ int32_t write_fn(struct dblog_write_context *ctx, void *buf, uint32_t pos, size_
     return DBLOG_RES_ERR;
   if (fflush(myFile))
     return DBLOG_RES_FLUSH_ERR;
+  fsync(fileno(myFile));
   return ret;
 }
 
 int flush_fn(struct dblog_write_context *ctx) {
-  fsync(fileno(myFile));
   return DBLOG_RES_OK;
 }
 
@@ -345,7 +344,7 @@ void display_row(struct dblog_read_context *ctx) {
 }
 
 void input_db_name() {
-  Serial.print(F("DB name (prefix /): "));
+  displayPrompt("DB name: "));
   input_string(filename, sizeof(filename));
 }
 
@@ -358,9 +357,14 @@ void log_analog_data() {
   int num_entries;
   int dly;
   input_db_name();
-  Serial.print(F("\nRecord count (1 to 32767 on UNO): "));
+  Serial.print(F("\nRecord count: "));
   num_entries = input_num();
-  Serial.print(F("\nNumber of analog pins (from A0): "));
+  // A0 = 36; A3 = 39; A4 = 32; A5 = 33; A6 = 34; A7 = 35; A10 = 4;
+  // A11 = 0; A12 = 2; A13 = 15; A14 = 13; A15 = 12; A16 = 14;
+  // A17 = 27; A18 = 25; A19 = 26;
+  Serial.print(F("\nStarting analog pin (32): "));
+  int8_t analog_pin_start = input_num();
+  Serial.print(F("\nNo. of pins (5): "));
   int8_t analog_pin_count = input_num();
   char ts[24];
   if (input_ts(ts) < 23) {
@@ -380,7 +384,7 @@ void log_analog_data() {
     ctx.buf = buf;
     ctx.col_count = analog_pin_count + 1;
     ctx.page_resv_bytes = 0;
-    ctx.page_size_exp = 9;
+    ctx.page_size_exp = 12;
     ctx.max_pages_exp = 0;
     ctx.read_fn = read_fn_wctx;
     ctx.flush_fn = flush_fn;
@@ -394,7 +398,7 @@ void log_analog_data() {
         update_ts(ts, (int) (millis() - last_ms));
         last_ms = millis();
         for (int8_t i = 0; i < analog_pin_count; i++) {
-          int val = analogRead(A0 + i);
+          int val = analogRead(analog_pin_start + i);
           res = dblog_set_col_val(&ctx, i + 1, DBLOG_TYPE_INT, &val, sizeof(int));
           if (res)
             break;
@@ -407,6 +411,7 @@ void log_analog_data() {
         }
       }
     }
+    Serial.print(F("\nLogging completed. Finalizing...\n"));
     if (!res)
       res = dblog_finalize(&ctx);
     fclose(myFile);
@@ -460,7 +465,7 @@ void locate_records(int8_t choice) {
     char srch_datetime[24]; // YYYY-MM-DD HH:MM:SS.SSS
     int8_t dt_len;
     if (choice == 2) {
-      Serial.print(F("\nEnter RowID (1 to 32767 on UNO): "));
+      Serial.print(F("\nEnter RowID: "));
       rowid = input_num();
     } else
       dt_len = input_ts(srch_datetime);
