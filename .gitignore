@@ -9,6 +9,8 @@ Makefile
 *.def
 *.exe
 *.db
+*.jpg
+*.jpeg
 a.out
 ulog_sqlite
 test_ulog_sqlite

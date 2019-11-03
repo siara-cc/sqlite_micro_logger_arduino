@@ -1,30 +1,49 @@
-# Sqlite µLogger
+# Sqlite µLogger for Arduino
 
-Lean and Mean Sqlite Data(base) Logger
+Sqlite µLogger is a Fast and Lean database logger that can log data into Sqlite databases even with SRAM as low as 2kb as in an Arduino Uno.
 
-## This library hosts both a C library and an Arduino library.
+This repo is an Arduino library that can work with Arduino Uno board or any Arduino board that has minimum 2kb RAM and a SD Shield attached.
+
+It has been tested with Arduino Uno with SparkFun MicroSD Shield, WeMos ESP8266 D1 Mini with WeMos MicroSD Shield and ESP32 SD_MMC breakout board.
+
+![](banner.png?raw=true)
 
 # Features
 
-- Memory requirement: `page_size` + some stack
-- "Finalize" is optional 
+- Low Memory requirement: `page_size` + some stack
 - Can log using Arduino UNO (2kb RAM) with 512kb page size
-- Can do binary search on RowID or Timestamp without any index
+- Can do quick binary search on RowID or Timestamp without any index in logarithmic time
 - Recovery possible in case of power failure
 - Rolling logs are possible (not implemented yet)
 - Can use any media using any IO library/API or even network filesystem
-- DMA writes possible
+- DMA writes possible (not shown)
+- Virtually any board and any media can be used as IO is done through callback functions.
+
+# Getting started
+
+The example `Uno_and_above` shows how data read from Analog pins can be stored along with Timestamp into Sqlite database and retrieved by RowId.
+
+Records can also be located using Timestamp in logarithmic time by doing a Binary Search on the data logged.  This is not possible using conventional loggers.
+
+For example, locating any record in a 70 MB db having 1 million records on Arduino UNO with SparkFun microSD Shield took only 1.6 seconds.
+
+The examples `ESP8266_Console` and `ESP32_Console` can be used to log and retrieve from ESP8266 and ESP32 boards respectively on Micro SD and SPIFFS filesystems.
 
 # Ensuring integrity
 
-During finalize:
-- If Sqlite format 3 and checksum matches, then all ok
-- If header checksum does not match, re-build header from leaf pages
-- If leaf page checksum does not match, discard it (optional?)
+If there is power failure during logging, the data can be recovered using `Recover database` option in the menu.
 
 # Limitations
 
+Following are limitations of this library:
+
 - Only one table per Sqlite database
 - Length of table script limited to (`page size` - 100) bytes
+- `Select`, `Insert` are not supported.  Instead C API similar to that of Sqlite API is available.
 - Index creation and lookup not possible (as of now)
 
+However, the database created can be copied to a desktop PC and further operations such as index creation and summarization can be carried out from there as though its a regular Sqlite database.
+
+# Support
+
+If you find any issues, please create an issue here or contact the author (Arundale Ramanathan) at arun@siara.cc.

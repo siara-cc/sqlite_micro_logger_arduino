@@ -344,7 +344,7 @@ void display_row(struct dblog_read_context *ctx) {
 }
 
 void input_db_name() {
-  displayPrompt("DB name: "));
+  displayPrompt("DB name: ");
   input_string(filename, sizeof(filename));
 }
 

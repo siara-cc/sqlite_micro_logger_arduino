@@ -23,20 +23,18 @@
 */
 #include "ulog_sqlite.h"
 #include <SPI.h>
+#include <FS.h>
 #include <SD.h>
 
-// Set the CS Pin connected to the MicroSD
-// 8 on most shields such as Sparkfun Micro SD Shield
-// 4 on WeMos D1 Mini
-#define SD_CS_PIN 8
+#define MAX_FILE_NAME_LEN 100
+#define MAX_STR_LEN 500
 
 // If you would like to read DBs created with this repo
-// with page size more than 512, change here,
+// with page size more than 4096, change here,
 // but ensure as much SRAM can be allocated.
-// Please Arduino Uno cannot support page size > 512.
-#define BUF_SIZE 512
+#define BUF_SIZE 4096
 byte buf[BUF_SIZE];
-char filename[13];
+char filename[MAX_FILE_NAME_LEN];
 extern const char sqlite_sig[];
 
 File myFile;
@@ -69,6 +67,109 @@ int32_t write_fn(struct dblog_write_context *ctx, void *buf, uint32_t pos, size_
 int flush_fn(struct dblog_write_context *ctx) {
   //myFile.flush(); // Anyway being flushed after write
   return DBLOG_RES_OK;
+}
+
+void listDir(int fs_type, const char * dirname) {
+  Serial.print(F("Listing directory: "));
+  Serial.println(dirname);
+  if (fs_type == 1) {
+    Dir dir = SPIFFS.openDir("/");
+    while (dir.next()) {
+        Serial.print(dir.fileName());
+        File f = dir.openFile("r");
+        Serial.print("\t");
+        Serial.println(f.size());
+    }
+    return;
+  }
+  File root = SD.open("/");
+  if (!root){
+    Serial.println(F("Failed to open directory"));
+    return;
+  }
+  if (!root.isDirectory()){
+    Serial.println("Not a directory");
+    return;
+  }
+  File file = root.openNextFile();
+  while (file) {
+    if (file.isDirectory()) {
+      Serial.print(" Dir : ");
+      Serial.println(file.name());
+    } else {
+      Serial.print(" File: ");
+      Serial.print(file.name());
+      Serial.print(" Size: ");
+      Serial.println(file.size());
+    }
+    file = root.openNextFile();
+  }
+}
+
+void renameFile(int fs_type, const char *path1, const char *path2) {
+  Serial.printf("Renaming file %s to %s\n", path1, path2);
+  int res = 0;
+  if (fs_type == 1)
+    res = SPIFFS.rename(path1, path2);
+  if (res) {
+    Serial.println(F("File renamed"));
+  } else {
+    Serial.println(F("Rename failed"));
+  }
+}
+
+void deleteFile(int fs_type, const char *path) {
+  Serial.printf("Deleting file: %s\n", path);
+  int res = 0;
+  if (fs_type == 1)
+    res = SPIFFS.remove(path);
+  if (res) {
+    Serial.println(F("File deleted"));
+  } else {
+    Serial.println(F("Delete failed"));
+  }
+}
+
+enum { CHOICE_LOG_ANALOG_DATA = 1, CHOICE_LOCATE_ROWID, CHOICE_LOCATE_BIN_SRCH, CHOICE_RECOVER_DB,
+    CHOICE_LIST_FOLDER, CHOICE_SHOW_FREE_MEM, CHOICE_RENAME_FILE, CHOICE_DELETE_FILE};
+
+int askChoice() {
+  Serial.println();
+  Serial.println(F("Welcome to SQLite Micro Logger console!!"));
+  Serial.println(F("----------------------------------------"));
+  Serial.println();
+  Serial.println(F("1. Log Analog data"));
+  Serial.println(F("2. Locate record using RowID"));
+  Serial.println(F("3. Locate record using Binary Search"));
+  Serial.println(F("4. Recover database"));
+  Serial.println(F("5. List folder contents (SPIFFS only)"));
+  Serial.println(F("6. Show free memory"));
+  Serial.println(F("7. Rename file (SPIFFS only)"));
+  Serial.println(F("8. Delete file (SPIFFS only)"));
+  Serial.println();
+  Serial.print(F("Enter choice: "));
+  return input_num();
+}
+
+void displayPrompt(const char *title) {
+  Serial.println(F("(prefix /spiffs/ or /sd/ for"));
+  Serial.println(F(" SPIFFS or SD_SPI respectively)"));
+  Serial.print(F("Enter "));
+  Serial.println(title);
+}
+
+const char *prefixSPIFFS = "/spiffs/";
+const char *prefixSD_SPI = "/sd/";
+int ascertainFS(const char *str, int *prefix_len) {
+  if (strstr(str, prefixSPIFFS) == str) {
+    *prefix_len = strlen(prefixSPIFFS) - 1;
+    return 1;
+  }
+  if (strstr(str, prefixSD_SPI) == str) {
+    *prefix_len = strlen(prefixSD_SPI) - 1;
+    return 2;
+  }
+  return 0;
 }
 
 void print_error(int res) {
@@ -247,8 +348,8 @@ void display_row(struct dblog_read_context *ctx) {
 }
 
 void input_db_name() {
-  Serial.print(F("DB name (max 8.3): "));
-  input_string(filename, sizeof(filename));
+  displayPrompt("DB name: ");
+  input_string(filename, MAX_FILE_NAME_LEN);
 }
 
 int input_ts(char *datetime) {
@@ -260,12 +361,8 @@ void log_analog_data() {
   int num_entries;
   int dly;
   input_db_name();
-  Serial.print(F("\nRecord count (1 to 32767 on UNO): "));
+  Serial.print(F("\nRecord count: "));
   num_entries = input_num();
-  Serial.print(F("\nStarting analog pin (14=A0 on Uno, 17=A0 on ESP8266): "));
-  int8_t analog_pin_start = input_num();
-  Serial.print(F("\nNo. of pins: "));
-  int8_t analog_pin_count = input_num();
   char ts[24];
   if (input_ts(ts) < 23) {
     Serial.print(F("Input full timestamp\n"));
@@ -274,8 +371,10 @@ void log_analog_data() {
   Serial.print(F("\nDelay(ms): "));
   dly = input_num();
 
-  SD.remove(filename);
-  myFile = SD.open(filename, FILE_WRITE);
+  if (strstr(filename, prefixSPIFFS) == filename)
+    myFile = SPIFFS.open(filename + 7, "w+b");
+  else
+    myFile = SD.open(filename + 3, FILE_WRITE);
 
   // if the file opened okay, write to it:
   if (myFile) {
@@ -283,9 +382,9 @@ void log_analog_data() {
     unsigned long last_ms = start;
     struct dblog_write_context ctx;
     ctx.buf = buf;
-    ctx.col_count = analog_pin_count + 1;
+    ctx.col_count = 2;
     ctx.page_resv_bytes = 0;
-    ctx.page_size_exp = 9;
+    ctx.page_size_exp = 12;
     ctx.max_pages_exp = 0;
     ctx.read_fn = read_fn_wctx;
     ctx.flush_fn = flush_fn;
@@ -298,12 +397,10 @@ void log_analog_data() {
           break;
         update_ts(ts, (int) (millis() - last_ms));
         last_ms = millis();
-        for (int8_t i = 0; i < analog_pin_count; i++) {
-          int val = analogRead(analog_pin_start + i);
-          res = dblog_set_col_val(&ctx, i + 1, DBLOG_TYPE_INT, &val, sizeof(int));
-          if (res)
-            break;
-        }
+        int val = analogRead(A0);
+        res = dblog_set_col_val(&ctx, 1, DBLOG_TYPE_INT, &val, sizeof(int));
+        if (res)
+          break;
         if (num_entries) {
           res = dblog_append_empty_row(&ctx);
           if (res)
@@ -312,6 +409,7 @@ void log_analog_data() {
         }
       }
     }
+    Serial.print(F("\nLogging completed. Finalizing...\n"));
     if (!res)
       res = dblog_finalize(&ctx);
     myFile.close();
@@ -335,11 +433,11 @@ void locate_records(int8_t choice) {
   struct dblog_read_context rctx;
   rctx.page_size_exp = 9;
   rctx.read_fn = read_fn_rctx;
-  myFile = SD.open(filename, FILE_READ);
+  if (strstr(filename, prefixSPIFFS) == filename)
+    myFile = SPIFFS.open(filename + 7, "r+b");
+  else
+    myFile = SD.open(filename + 3, FILE_READ);
   if (myFile) {
-    Serial.print(F("Size:"));
-    Serial.print(myFile.size());
-    Serial.print(F("\n"));
     rctx.buf = buf;
     int res = dblog_read_init(&rctx);
     if (res) {
@@ -368,7 +466,7 @@ void locate_records(int8_t choice) {
     char srch_datetime[24]; // YYYY-MM-DD HH:MM:SS.SSS
     int8_t dt_len;
     if (choice == 2) {
-      Serial.print(F("\nEnter RowID (1 to 32767 on UNO): "));
+      Serial.print(F("\nEnter RowID: "));
       rowid = input_num();
     } else
       dt_len = input_ts(srch_datetime);
@@ -404,7 +502,10 @@ void recover_db() {
   ctx.write_fn = write_fn;
   ctx.flush_fn = flush_fn;
   input_db_name();
-  myFile = SD.open(filename, FILE_WRITE);
+  if (strstr(filename, prefixSPIFFS) == filename)
+    myFile = SPIFFS.open(filename + 7, "r+b");
+  else
+    myFile = SD.open(filename + 3, FILE_READ);
   if (!myFile) {
     print_error(0);
     return;
@@ -426,13 +527,15 @@ void recover_db() {
 bool is_inited = false;
 void setup() {
 
-  Serial.begin(9600);
+  Serial.begin(74880);
   while (!Serial) {
   }
 
   Serial.print(F("InitSD..\n"));
-  if (!SD.begin(SD_CS_PIN)) {
-    Serial.print(F("failed!\n"));
+  SPIFFS.begin();
+  SPI.begin();
+  if (!SD.begin(4)) {
+    Serial.print(F("Failed to mount SD FS\n"));
     return;
   }
 
@@ -441,31 +544,60 @@ void setup() {
 
 }
 
+char str[MAX_STR_LEN];
 void loop() {
 
   if (!is_inited)
     return;
 
-  Serial.print(F("\n\nSqlite µLogger\n\n"));
-  Serial.print(F("1. Log analog data\n"));
-  Serial.print(F("2. Locate records by RowID\n"));
-  Serial.print(F("3. Locate records using Binary Search\n"));
-  Serial.print(F("4. Recover DB\n\n"));
-  Serial.print(F("Enter choice: "));
-  int8_t choice = input_num();
+  int choice = askChoice();
   switch (choice) {
-    case 1:
-      log_analog_data();
-      break;
-    case 2:
-    case 3:
-      locate_records(choice);
-      break;
-    case 4:
-      recover_db();
-      break;
-    default:
-      Serial.print(F("Invalid choice\n"));
+      case CHOICE_LOG_ANALOG_DATA:
+        log_analog_data();
+        break;
+      case CHOICE_LOCATE_ROWID:
+      case CHOICE_LOCATE_BIN_SRCH:
+        locate_records(choice);
+        break;
+      case CHOICE_RECOVER_DB:
+        recover_db();
+        break;
+      case CHOICE_LIST_FOLDER:
+      case CHOICE_RENAME_FILE:
+      case CHOICE_DELETE_FILE:
+        displayPrompt("path: ");
+        input_string(str, MAX_STR_LEN);
+        if (str[0] != 0) {
+          int fs_prefix_len = 0;
+          int fs_type = ascertainFS(str, &fs_prefix_len);
+          if (fs_type != 0) {
+            switch (choice) {
+              case CHOICE_LIST_FOLDER:
+                listDir(fs_type, str + fs_prefix_len);
+                break;
+              case CHOICE_RENAME_FILE:
+                char str1[MAX_FILE_NAME_LEN];
+                displayPrompt("path to rename as: ");
+                input_string(str1, MAX_STR_LEN);
+                if (str1[0] != 0)
+                  renameFile(fs_type, str + fs_prefix_len, str1 + fs_prefix_len);
+                break;
+              case CHOICE_DELETE_FILE:
+                deleteFile(fs_type, str + fs_prefix_len);
+                break;
+            }
+          }
+        }
+        break;
+      case CHOICE_SHOW_FREE_MEM:
+        //Serial.printf("\nHeap size: %d\n", ESP.getHeapSize());
+        Serial.printf("Free Heap: %d\n", ESP.getFreeHeap());
+        //Serial.printf("Min Free Heap: %d\n", ESP.getMinFreeBlockSize());
+        Serial.printf("Fragmentation: %d\n", ESP.getHeapFragmentation());
+        Serial.printf("Max Free Heap: %d\n", ESP.getMaxFreeBlockSize());
+        break;
+      default:
+        Serial.println(F("Invalid choice. Try again."));
   }
 
 }
