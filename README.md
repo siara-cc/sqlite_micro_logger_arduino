@@ -11,7 +11,7 @@ It has been tested with Arduino Uno with SparkFun MicroSD Shield, WeMos ESP8266 
 # Features
 
 - Low Memory requirement: `page_size` + some stack
-- Can log using Arduino UNO (2kb RAM) with 512kb page size
+- Can log using Arduino UNO (`2kb` RAM) with 512 bytes page size
 - Can do quick binary search on RowID or Timestamp without any index in logarithmic time
 - Recovery possible in case of power failure
 - Rolling logs are possible (not implemented yet)
@@ -29,6 +29,10 @@ For example, locating any record in a 70 MB db having 1 million records on Ardui
 
 The examples `ESP8266_Console` and `ESP32_Console` can be used to log and retrieve from ESP8266 and ESP32 boards respectively on Micro SD and SPIFFS filesystems.
 
+# API
+
+For finding out how the logger works and a complete description of API visit [Sqlite Micro Logger C Library](https://github.com/siara-cc/sqlite_micro_logger_c).
+
 # Ensuring integrity
 
 If there is power failure during logging, the data can be recovered using `Recover database` option in the menu.
@@ -42,7 +46,14 @@ Following are limitations of this library:
 - `Select`, `Insert` are not supported.  Instead C API similar to that of Sqlite API is available.
 - Index creation and lookup not possible (as of now)
 
-However, the database created can be copied to a desktop PC and further operations such as index creation and summarization can be carried out from there as though its a regular Sqlite database.
+However, the database created can be copied to a desktop PC and further operations such as index creation and summarization can be carried out from there as though its a regular Sqlite database.  But after doing so, it may not be possible to use it with this library any longer.
+
+# Future plans
+
+- Index creation when finalizing a database
+- Allow modification of records
+- Rolling logs
+- Show how this library can be used in a multi-core, multi-threaded environment
 
 # Support
 
