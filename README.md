@@ -1,6 +1,6 @@
 # Sqlite µLogger for Arduino
 
-Sqlite µLogger is a Fast and Lean database logger that can log data into Sqlite databases even with SRAM as low as 2kb as in an Arduino Uno.
+Sqlite µLogger is a Fast and Lean database logger that can log data into Sqlite databases even with SRAM as low as 2kb as in an Arduino Uno. The source code can be ported to use with any Microcontroller having at least 2kb RAM.
 
 This repo is an Arduino library that can work with Arduino Uno board or any Arduino board that has minimum 2kb RAM and a SD Shield attached.
 
