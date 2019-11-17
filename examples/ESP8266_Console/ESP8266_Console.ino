@@ -389,24 +389,20 @@ void log_analog_data() {
     ctx.read_fn = read_fn_wctx;
     ctx.flush_fn = flush_fn;
     ctx.write_fn = write_fn;
+    int val;
+    uint8_t types[] = {DBLOG_TYPE_TEXT, DBLOG_TYPE_INT};
+    void *values[] = {ts, &val};
+    uint16_t lengths[] = {23, sizeof(val)};
     int res = dblog_write_init(&ctx);
     if (!res) {
       while (num_entries--) {
-        res = dblog_set_col_val(&ctx, 0, DBLOG_TYPE_TEXT, ts, 23);
+        val = analogRead(A0);
+        res = dblog_append_row_with_values(&ctx, types, (const void **) values, lengths);
         if (res)
           break;
         update_ts(ts, (int) (millis() - last_ms));
         last_ms = millis();
-        int val = analogRead(A0);
-        res = dblog_set_col_val(&ctx, 1, DBLOG_TYPE_INT, &val, sizeof(int));
-        if (res)
-          break;
-        if (num_entries) {
-          res = dblog_append_empty_row(&ctx);
-          if (res)
-            break;
-          delay(dly);
-        }
+        delay(dly);
       }
     }
     Serial.print(F("\nLogging completed. Finalizing...\n"));
