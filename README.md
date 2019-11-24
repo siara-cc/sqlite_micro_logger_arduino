@@ -37,6 +37,38 @@ For finding out how the logger works and a complete description of API visit [Sq
 
 If there is power failure during logging, the data can be recovered using `Recover database` option in the menu.
 
+# Examples
+
+# Arduino Uno
+
+This screenshot shows how analog data can be logged and retrieved using Arduino Uno and Sparkfun Micro SD Shield:
+
+![](uno_log_scr.png?raw=true)
+
+This screenshot shows how binary search can be performed on the timestamp field:
+
+![](uno_bin_srch_scr.png?raw=true)
+
+# ESP8266
+
+This screenshot shows how analog data can be logged and retrieved using ESP8266 (WeMos D1 Mini and Micro SD Shield):
+
+![](esp8266_analog_scr.png?raw=true)
+
+This screenshot shows how binary search can be performed on the timestamp field using ESP8266:
+
+![](esp8266_bin_srch_scr.png?raw=true)
+
+# ESP32
+
+This screenshot shows how analog data can be logged and retrieved using ESP32 breakout board having a Micro SD Slot on the SD_MMC port:
+
+![](esp32_analog_scr.png?raw=true)
+
+This screenshot shows how binary search can be performed on the timestamp field using ESP32:
+
+![](esp32_bin_srch_scr.png?raw=true)
+
 # Limitations
 
 Following are limitations of this library:
