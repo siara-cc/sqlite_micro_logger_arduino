@@ -39,7 +39,7 @@ If there is power failure during logging, the data can be recovered using `Recov
 
 # Examples
 
-# Arduino Uno
+## Arduino Uno
 
 This screenshot shows how analog data can be logged and retrieved using Arduino Uno and Sparkfun Micro SD Shield:
 
@@ -49,7 +49,7 @@ This screenshot shows how binary search can be performed on the timestamp field:
 
 ![](uno_bin_srch_scr.png?raw=true)
 
-# ESP8266
+## ESP8266
 
 This screenshot shows how analog data can be logged and retrieved using ESP8266 (WeMos D1 Mini and Micro SD Shield):
 
@@ -59,7 +59,7 @@ This screenshot shows how binary search can be performed on the timestamp field 
 
 ![](esp8266_bin_srch_scr.png?raw=true)
 
-# ESP32
+## ESP32
 
 This screenshot shows how analog data can be logged and retrieved using ESP32 breakout board having a Micro SD Slot on the SD_MMC port:
 
