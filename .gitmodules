@@ -1,3 +1,0 @@
-[submodule "src"]
-	path = src
-	url = https://siara-cc@github.com/siara-cc/sqlite_micro_logger_src
