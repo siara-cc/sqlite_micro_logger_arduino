@@ -275,7 +275,7 @@ void log_analog_data() {
   dly = input_num();
 
   SD.remove(filename);
-  myFile = SD.open(filename, FILE_WRITE);
+  myFile = SD.open(filename, O_READ | O_WRITE | O_CREAT);
 
   // if the file opened okay, write to it:
   if (myFile) {
