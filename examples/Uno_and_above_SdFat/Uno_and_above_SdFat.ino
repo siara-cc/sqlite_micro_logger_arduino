@@ -23,7 +23,8 @@
 */
 #include "ulog_sqlite.h"
 #include <SPI.h>
-#include <SD.h>
+#include "SdFat.h"
+SdFat SD;
 
 // Set the CS Pin connected to the MicroSD
 // 8 on most shields such as Sparkfun Micro SD Shield
