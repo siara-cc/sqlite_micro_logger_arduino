@@ -265,7 +265,7 @@ int update_ts_part(char *ptr, int8_t len, int limit, int ovflw) {
   int part = get_ts_part(ptr, len) + ovflw - is_one_based;
   ovflw = part / limit;
   part %= limit;
-  set_ts_part(ptr, part - is_one_based, len);
+  set_ts_part(ptr, part + is_one_based, len);
   return ovflw;
 }
 
@@ -282,11 +282,11 @@ void update_ts(char *ts, int diff) {
         if (ovflw) {
           int8_t month = get_ts_part(ts + 5, 2);
           int year = get_ts_part(ts, 4);
-          int8_t limit = (month == 2 ? (year % 4 ? 27 : 28) : 
-            (month == 4 || month == 6 || month == 9 || month == 11 ? 29 : 30));
+          int8_t limit = (month == 2 ? (year % 4 ? 28 : 29) : 
+            (month == 4 || month == 6 || month == 9 || month == 11 ? 30 : 31));
           ovflw = update_ts_part(ts + 8, 2, limit, ovflw); // day
           if (ovflw) {
-            ovflw = update_ts_part(ts + 5, 2, 11, ovflw); // month
+            ovflw = update_ts_part(ts + 5, 2, 12, ovflw); // month
             if (ovflw)
               set_ts_part(ts, year + ovflw, 4); // year
           }
