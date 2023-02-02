@@ -122,10 +122,10 @@ uint32_t read_uint32(byte *ptr) {
   return ret;
 }
 
-// Reads and returns big-endian uint32_t
+// Reads and returns big-endian uint64_t
 // at a given memory location
 uint64_t read_uint64(byte *ptr) {
-  uint32_t ret = 0;
+  uint64_t ret = 0;
   int len = 8;
   while (len--)
     ret += (*ptr++ << (8 * len));
