@@ -128,7 +128,7 @@ uint64_t read_uint64(byte *ptr) {
   uint64_t ret = 0;
   int len = 8;
   while (len--)
-    ret += (*ptr++ << (8 * len));
+    ret += (((uint64_t)*ptr++) << (8 * len));
   return ret;
 }
 
