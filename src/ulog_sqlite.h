@@ -77,6 +77,8 @@ struct dblog_write_context {
   int err_no;
 };
 
+typedef int32_t (*write_fn_def)(struct dblog_write_context *ctx, void *buf, uint32_t pos, size_t len);
+
 // Initializes database - writes first page
 // and makes it ready for writing data
 int dblog_write_init(struct dblog_write_context *wctx);
@@ -201,6 +203,15 @@ int dblog_srch_row_by_id(struct dblog_read_context *rctx, uint32_t rowid);
 // is_rowid = 1 is used to do Binary Search by RowId
 int dblog_bin_srch_row_by_val(struct dblog_read_context *rctx, int col_idx,
       int val_type, void *val, uint16_t len, byte is_rowid);
+
+// Updates value of column at current position
+// For text and blob columns, pass the type to dblog_derive_data_len()
+// to get the actual length
+int dblog_upd_col_val(struct dblog_read_context *rctx, int col_idx, const void *val);
+
+// Writes the current page to disk
+// Typically called after updating values using dblog_upd_col_val()
+int dblog_write_cur_page(struct dblog_read_context *rctx, write_fn_def write_fn);
 
 #ifdef __cplusplus
 }

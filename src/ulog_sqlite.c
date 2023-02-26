@@ -255,6 +255,28 @@ uint32_t derive_col_type_or_len(int type, const void *val, int len) {
   return col_type_or_len;    
 }
 
+// Returns one of the four types based on column type or len
+// found in header
+// See https://www.sqlite.org/fileformat.html#record_format
+uint32_t derive_col_type(int hdr_col_type_or_len) {
+  switch (hdr_col_type_or_len) {
+    case 7:
+      return DBLOG_TYPE_REAL;
+    case 1:
+    case 2:
+    case 3:
+    case 4:
+    case 5:
+    case 6:
+    case 8:
+    case 9:
+      return DBLOG_TYPE_INT;
+    default:
+      return (hdr_col_type_or_len % 2 ? DBLOG_TYPE_TEXT : DBLOG_TYPE_BLOB);
+  }
+  return DBLOG_TYPE_TEXT; // error
+}
+
 byte c1, c2, c3;
 void saveChecksumBytes(byte * ptr, uint16_t last_pos) {
   ptr += last_pos;
@@ -1471,4 +1493,28 @@ int dblog_bin_srch_row_by_val(struct dblog_read_context *rctx, int col_idx,
   rctx->cur_page = found_at_page;
   rctx->cur_rec_pos = size;
   return DBLOG_RES_OK;
+}
+
+// See .h file for API description
+int dblog_upd_col_val(struct dblog_read_context *rctx, int col_idx, const void *val) {
+  uint8_t *buf = rctx->buf;
+  if (buf[0] != 13)
+    return DBLOG_RES_ERR;
+  int16_t rec_count = read_uint16(rctx->buf + 3);
+  if (rec_count <= rctx->cur_rec_pos)
+    return DBLOG_RES_ERR;
+  uint32_t u32_at;
+  byte *val_at = read_val_at(rctx, rctx->cur_rec_pos, col_idx, &u32_at, 0);
+  if (!val_at)
+    return DBLOG_RES_NOT_FOUND;
+  int len = dblog_derive_data_len(u32_at);
+  write_data(val_at, derive_col_type(u32_at), val, len);
+  return DBLOG_RES_OK;
+}
+
+int dblog_write_cur_page(struct dblog_read_context *rctx, write_fn_def write_fn) {
+  struct dblog_write_context wctx;
+  wctx.buf = rctx->buf;
+  wctx.write_fn = write_fn;
+  return write_page(&wctx, rctx->cur_page, get_pagesize(rctx->page_size_exp));
 }
